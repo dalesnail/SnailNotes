@@ -1,0 +1,8 @@
+package-as: SnailNotes
+
+ignore:
+  - .github
+  - README.md
+  - LICENSE
+  - .gitignore
+  - DEV_CONTEXT.md
