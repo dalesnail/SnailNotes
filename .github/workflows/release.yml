@@ -19,3 +19,5 @@ jobs:
         uses: BigWigsMods/packager@v2
         with:
           args: -u
+        env:
+          GITHUB_OAUTH: ${{ secrets.BIGWIGS }}
