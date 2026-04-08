@@ -1,0 +1,5 @@
+<Bindings>
+    <Binding name="SNAILNOTES_TOGGLE" category="|cff4da3ffSnailNotes|r">
+        SnailNotes_ToggleBinding();
+    </Binding>
+</Bindings>

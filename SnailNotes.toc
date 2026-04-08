@@ -1,0 +1,16 @@
+## Interface: 20504
+## Title: SnailNotes
+## Notes: Notes addon.
+## Author: Dalesnail
+## Version: 0.1.0
+## SavedVariables: SnailNotesDB
+
+Embeds.xml
+
+Core\Bootstrap.lua
+Notes\NotesGuideData.lua
+Notes\Notes.lua
+Notes\NotesOptions.lua
+Notes\NotesRender.lua
+Notes\NotesImportExport.lua
+Notes\NotesUI.lua
