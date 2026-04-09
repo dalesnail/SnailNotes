@@ -1,8 +1,8 @@
-## Interface: 20504
+## Interface: 50503, 40402, 20505, 11508
 ## Title: SnailNotes
 ## Notes: Notes addon.
 ## Author: Dalesnail
-## Version: v1.0.0
+## Version: v1.0.1
 ## SavedVariables: SnailNotesDB
 
 Embeds.xml

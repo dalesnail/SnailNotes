@@ -6,7 +6,6 @@ _G.SnailNotes = SnailNotes
 _G.BINDING_NAME_SNAILNOTES_TOGGLE = "Toggle SnailNotes"
 
 SnailNotes.ADDON_NAME = ADDON_NAME
-SnailNotes.VERSION = GetAddOnMetadata and GetAddOnMetadata(ADDON_NAME, "Version") or "0.1.0"
 
 local function DeepCopy(value)
     if type(value) ~= "table" then
