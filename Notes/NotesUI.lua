@@ -129,48 +129,6 @@ local NOTE_READ_BODY_SHADOW_INSET = HOME_LIST_INNER_SHADOW_INSET
 local NOTE_PREVIEW_BODY_SHADOW_ALPHA = HOME_LIST_INNER_SHADOW_ALPHA
 local NOTE_PREVIEW_BODY_SHADOW_INSET = HOME_LIST_INNER_SHADOW_INSET
 
-local resolvedTabButtonTemplate
-
-local function CreatePlainTabButton(parent, name)
-    local button = CreateFrame("Button", name, parent)
-    button.snailNotesUsesPlainTabFallback = true
-    button.text = button:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-    button.text:SetPoint("CENTER", 0, 0)
-
-    button.SetText = function(self, text)
-        if self.text then
-            self.text:SetText(text)
-        end
-    end
-
-    return button
-end
-
-local function CanCreateFrameWithTemplate(templateName)
-    if not templateName or templateName == "" then
-        return false
-    end
-
-    local ok = pcall(CreateFrame, "Button", nil, UIParent, templateName)
-    return ok
-end
-
-local function GetTabButtonTemplate()
-    if resolvedTabButtonTemplate ~= nil then
-        return resolvedTabButtonTemplate or nil
-    end
-
-    if CanCreateFrameWithTemplate("CharacterFrameTabButtonTemplate") then
-        resolvedTabButtonTemplate = "CharacterFrameTabButtonTemplate"
-    elseif CanCreateFrameWithTemplate("OptionsFrameTabButtonTemplate") then
-        resolvedTabButtonTemplate = "OptionsFrameTabButtonTemplate"
-    else
-        resolvedTabButtonTemplate = false
-    end
-
-    return resolvedTabButtonTemplate or nil
-end
-
 local function FormatHomeListTimestamp(timestamp, createdTimestamp)
     local safeTimestamp = tonumber(timestamp) or tonumber(createdTimestamp) or time()
     local safeCreated = tonumber(createdTimestamp) or safeTimestamp
@@ -1571,10 +1529,7 @@ function module:SetTabTitle(tab, title)
 
     tab.title = title or "Note"
     tab.button:SetText(tab.title)
-    if tab.button.snailNotesUsesPlainTabFallback then
-        local textWidth = tab.button.text and tab.button.text:GetStringWidth() or 0
-        tab.button:SetWidth(math.max(72, textWidth + 28))
-    elseif PanelTemplates_TabResize then
+    if PanelTemplates_TabResize then
         PanelTemplates_TabResize(tab.button, 0)
     end
 end
@@ -1586,15 +1541,7 @@ function module:SetTabSelected(tab, selected)
 
     tab.selected = selected and true or false
 
-    if tab.button.snailNotesUsesPlainTabFallback then
-        if tab.button.text then
-            if tab.selected then
-                tab.button.text:SetTextColor(1, 0.82, 0)
-            else
-                tab.button.text:SetTextColor(0.95, 0.95, 0.95)
-            end
-        end
-    elseif tab.selected then
+    if tab.selected then
         if PanelTemplates_SelectTab then
             PanelTemplates_SelectTab(tab.button)
         end
@@ -1668,22 +1615,14 @@ end
 
 function module:CreateTab(frame, definition, index)
     local buttonName = (frame:GetName() or "SnailNotesFrame") .. "Tab" .. index
-    local buttonTemplate = GetTabButtonTemplate()
-    local button
-
-    if buttonTemplate then
-        button = CreateFrame("Button", buttonName, frame, buttonTemplate)
-    else
-        button = CreatePlainTabButton(frame, buttonName)
-    end
-
+    local button = CreateFrame("Button", buttonName, frame, "CharacterFrameTabButtonTemplate")
     button:SetParent(frame.tabBar)
     button:SetID(index)
     button:SetFrameStrata(frame:GetFrameStrata())
     button:SetFrameLevel((frame:GetFrameLevel() or 1) + 8)
     button:SetHeight(TAB_HEIGHT)
     button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    button.text = button.text or (button.GetFontString and button:GetFontString()) or button.Text
+    button.text = button.GetFontString and button:GetFontString() or button.Text
 
     local content = CreateFrame("Frame", nil, frame.contentHost)
     content:SetAllPoints()
