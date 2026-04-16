@@ -13,17 +13,29 @@ local NOTE_FLOAT_WINDOW_WIDTH = 560
 local NOTE_FLOAT_WINDOW_HEIGHT = 560
 local NOTE_FLOAT_WINDOW_MIN_WIDTH = 240
 local NOTE_FLOAT_WINDOW_MIN_HEIGHT = 180
+local NOTE_FLOAT_COLLAPSED_HEIGHT = 28
 local NOTE_FLOAT_BACKGROUND_COLOR = { 0, 0, 0, 0.18 }
 local NOTE_FLOAT_CLOSE_BUTTON_SIZE = 16
 local NOTE_FLOAT_CLOSE_BUTTON_RIGHT_INSET = 6
 local NOTE_FLOAT_CLOSE_BUTTON_TOP_INSET = 4
+local NOTE_FLOAT_COLLAPSE_BUTTON_SIZE = 18
+local NOTE_FLOAT_COLLAPSE_BUTTON_FONT_SIZE = 15
+local NOTE_FLOAT_COLLAPSE_BUTTON_RIGHT_INSET = 26
+local NOTE_FLOAT_COLLAPSE_BUTTON_TOP_INSET = 3
+local NOTE_FLOAT_TITLE_LEFT_INSET = 8
+local NOTE_FLOAT_TITLE_RIGHT_INSET = 44
+local NOTE_FLOAT_TITLE_TOP_INSET = 7
 local NOTE_FLOAT_LOCK_TEXT_RIGHT_INSET = 18
 local NOTE_FLOAT_LOCK_TEXT_BOTTOM_INSET = 6
 local NOTE_FLOAT_RESIZE_GRIP_SIZE = 14
 local NOTE_FLOAT_RESIZE_GRIP_RIGHT_INSET = 4
 local NOTE_FLOAT_RESIZE_GRIP_BOTTOM_INSET = 4
+local NOTE_FLOAT_RESIZE_GRIP_ALPHA = 0.78
+local NOTE_FLOAT_RESIZE_GRIP_HOVER_ALPHA = 1.0
 local NOTE_FLOAT_CONTROL_TEXT_COLOR = { 0.90, 0.90, 0.90, 0.90 }
 local NOTE_FLOAT_CONTROL_TEXT_HOVER_COLOR = { 1.0, 1.0, 1.0, 1.0 }
+local NOTE_FLOAT_HEADER_BUTTON_VISIBLE_ALPHA = 1.0
+local NOTE_FLOAT_HEADER_BUTTON_HIDDEN_ALPHA = 0.03
 local NOTE_FLOAT_LOCK_BUTTON_VISIBLE_ALPHA = 1.0
 local NOTE_FLOAT_LOCK_BUTTON_IDLE_ALPHA = 0.92
 local NOTE_FLOAT_LOCK_BUTTON_HIDDEN_ALPHA = 0.03
@@ -120,17 +132,71 @@ local function ClampFloatWindowSize(width, height)
     return width, height
 end
 
+local function GetFloatWindowDisplayTitle(frame)
+    local noteId = frame and frame.noteId or nil
+    local note = noteId and module:GetNoteById(noteId) or nil
+    if not note then
+        return ""
+    end
+
+    return NormalizeNoteTitle(note.title)
+end
+
+local function ApplyFloatWindowCollapsedState(frame)
+    if not frame then
+        return
+    end
+
+    local isCollapsed = frame.isCollapsed == true
+    if frame.contentHost then
+        frame.contentHost:SetShown(not isCollapsed)
+    end
+    if frame.lockButton then
+        frame.lockButton:SetShown(not isCollapsed)
+    end
+    if frame.resizeGrip then
+        frame.resizeGrip:SetShown(not isCollapsed and not frame.isLocked)
+        frame.resizeGrip:EnableMouse((not isCollapsed) and (not frame.isLocked))
+    end
+    if frame.titleText then
+        frame.titleText:SetShown(isCollapsed)
+        frame.titleText:SetText(GetFloatWindowDisplayTitle(frame))
+    end
+    if frame.collapseButton and frame.collapseButton.text then
+        frame.collapseButton.text:SetText(isCollapsed and "+" or "-")
+    end
+end
+
+local function RefreshFloatWindowHeaderButtonVisibility(frame)
+    if not frame then
+        return
+    end
+
+    local isActiveHover = frame.isMouseOver == true
+        or frame.isCloseButtonHovered == true
+        or frame.isCollapseButtonHovered == true
+    local targetAlpha = isActiveHover and NOTE_FLOAT_HEADER_BUTTON_VISIBLE_ALPHA or NOTE_FLOAT_HEADER_BUTTON_HIDDEN_ALPHA
+
+    if frame.closeButton then
+        frame.closeButton:SetAlpha(targetAlpha)
+    end
+    if frame.collapseButton then
+        frame.collapseButton:SetAlpha(targetAlpha)
+    end
+end
+
 local function UpdateFloatWindowInteractionState(frame)
     if not frame then
         return
     end
 
     local isLocked = frame.isLocked == true
+    local isCollapsed = frame.isCollapsed == true
     frame:SetMovable(not isLocked)
-    frame:SetResizable(not isLocked)
+    frame:SetResizable((not isLocked) and (not isCollapsed))
     if frame.resizeGrip then
-        frame.resizeGrip:SetShown(not isLocked)
-        frame.resizeGrip:EnableMouse(not isLocked)
+        frame.resizeGrip:SetShown((not isLocked) and (not isCollapsed))
+        frame.resizeGrip:EnableMouse((not isLocked) and (not isCollapsed))
     end
     if frame.lockButton and frame.lockButton.text then
         frame.lockButton.text:SetText(isLocked and "unlock" or "lock")
@@ -166,6 +232,7 @@ function module:GetFloatWindowSettings()
     floatSettings.x = tonumber(floatSettings.x) or -300
     floatSettings.y = tonumber(floatSettings.y) or 0
     floatSettings.locked = floatSettings.locked == true
+    floatSettings.collapsed = floatSettings.collapsed == true
     if floatSettings.showTextures == nil then
         floatSettings.showTextures = true
     else
@@ -182,6 +249,11 @@ function module:GetFloatWindowSettings()
         backgroundAlpha = NOTE_FLOAT_BACKGROUND_COLOR[4] or 0.18
     end
     floatSettings.backgroundAlpha = math.max(0, math.min(backgroundAlpha, 1))
+    local expandedHeight = tonumber(floatSettings.expandedHeight)
+    if not expandedHeight then
+        expandedHeight = floatSettings.height
+    end
+    floatSettings.expandedHeight = math.max(NOTE_FLOAT_WINDOW_MIN_HEIGHT, math.floor((tonumber(expandedHeight) or NOTE_FLOAT_WINDOW_HEIGHT) + 0.5))
     return floatSettings
 end
 
@@ -259,9 +331,17 @@ function module:SaveFloatWindowGeometry(frame)
     end
 
     local settings = self:GetFloatWindowSettings()
-    local width, height = ClampFloatWindowSize(frame:GetWidth(), frame:GetHeight())
+    local width, height
+    if frame.isCollapsed then
+        local maxWidth = GetSafeWindowScreenBounds()
+        width = math.max(NOTE_FLOAT_WINDOW_MIN_WIDTH, math.min(math.floor((frame:GetWidth() or NOTE_FLOAT_WINDOW_WIDTH) + 0.5), maxWidth))
+        height = NOTE_FLOAT_COLLAPSED_HEIGHT
+    else
+        width, height = ClampFloatWindowSize(frame:GetWidth(), frame:GetHeight())
+        settings.expandedHeight = height
+    end
     settings.width = width
-    settings.height = height
+    settings.height = frame.isCollapsed and (settings.expandedHeight or NOTE_FLOAT_WINDOW_HEIGHT) or height
 
     local point, _, relativePoint, x, y = frame:GetPoint(1)
     settings.point = point or "CENTER"
@@ -269,6 +349,7 @@ function module:SaveFloatWindowGeometry(frame)
     settings.x = x or 0
     settings.y = y or 0
     settings.locked = frame.isLocked == true
+    settings.collapsed = frame.isCollapsed == true
 end
 
 function module:UpdateFloatWindowResizeBounds(frame)
@@ -291,11 +372,47 @@ function module:ApplyFloatWindowGeometry(frame)
 
     local settings = self:GetFloatWindowSettings()
     self:UpdateFloatWindowResizeBounds(frame)
-    local width, height = ClampFloatWindowSize(settings.width, settings.height)
-    frame:SetSize(width, height)
+    local maxWidth = GetSafeWindowScreenBounds()
+    local width = math.max(NOTE_FLOAT_WINDOW_MIN_WIDTH, math.min(math.floor((tonumber(settings.width) or NOTE_FLOAT_WINDOW_WIDTH) + 0.5), maxWidth))
+    local expandedHeight = math.max(NOTE_FLOAT_WINDOW_MIN_HEIGHT, math.floor((tonumber(settings.expandedHeight) or settings.height or NOTE_FLOAT_WINDOW_HEIGHT) + 0.5))
+    if not settings.collapsed then
+        width, expandedHeight = ClampFloatWindowSize(width, expandedHeight)
+    end
+    frame:SetSize(width, settings.collapsed and NOTE_FLOAT_COLLAPSED_HEIGHT or expandedHeight)
+    frame.isCollapsed = settings.collapsed == true
     frame:ClearAllPoints()
     frame:SetPoint(settings.point or "CENTER", UIParent, settings.relativePoint or settings.point or "CENTER", settings.x or 0, settings.y or 0)
     self:EnsureWindowGeometryIsReachable(frame)
+    ApplyFloatWindowCollapsedState(frame)
+end
+
+function module:SetFloatWindowCollapsed(frame, collapsed)
+    if not frame then
+        return
+    end
+
+    local settings = self:GetFloatWindowSettings()
+    local normalizedCollapsed = collapsed == true
+    if frame.isCollapsed == normalizedCollapsed then
+        return
+    end
+
+    if not normalizedCollapsed then
+        frame.isCollapsed = false
+        settings.collapsed = false
+        local width, height = ClampFloatWindowSize(frame:GetWidth(), settings.expandedHeight or settings.height or NOTE_FLOAT_WINDOW_HEIGHT)
+        frame:SetSize(width, height)
+    else
+        local _, currentHeight = ClampFloatWindowSize(frame:GetWidth(), frame:GetHeight())
+        settings.expandedHeight = currentHeight
+        settings.collapsed = true
+        frame.isCollapsed = true
+        frame:SetHeight(NOTE_FLOAT_COLLAPSED_HEIGHT)
+    end
+
+    UpdateFloatWindowInteractionState(frame)
+    ApplyFloatWindowCollapsedState(frame)
+    self:SaveFloatWindowGeometry(frame)
 end
 
 function module:GetFloatWindowProxyTab(noteId)
@@ -388,6 +505,7 @@ function module:RefreshFloatWindow()
 
     self:RefreshFloatReadView(readView, renderedBody, preserveScroll)
     floatWindow.noteId = note.id
+    ApplyFloatWindowCollapsedState(floatWindow)
     self:UpdateReadItemInfoEventRegistration()
     return true
 end
@@ -429,6 +547,7 @@ function module:CreateFloatWindow()
     self:ApplyFloatWindowGeometry(frame)
     local floatSettings = self:GetFloatWindowSettings()
     frame.isLocked = floatSettings.locked == true
+    frame.isCollapsed = floatSettings.collapsed == true
 
     frame.background = frame:CreateTexture(nil, "BACKGROUND")
     frame.background:SetAllPoints()
@@ -459,10 +578,14 @@ function module:CreateFloatWindow()
     frame.closeButton.text:SetAllPoints()
     frame.closeButton.text:SetText("x")
     frame.closeButton:SetScript("OnEnter", function(selfButton)
+        frame.isCloseButtonHovered = true
         selfButton.text:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_HOVER_COLOR))
+        RefreshFloatWindowHeaderButtonVisibility(frame)
     end)
     frame.closeButton:SetScript("OnLeave", function(selfButton)
+        frame.isCloseButtonHovered = nil
         selfButton.text:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_COLOR))
+        RefreshFloatWindowHeaderButtonVisibility(frame)
     end)
     frame.closeButton:SetScript("OnClick", function()
         local settings = module:GetFloatWindowSettings()
@@ -470,6 +593,45 @@ function module:CreateFloatWindow()
         module:HideFloatWindow()
     end)
     frame.closeButton.text:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_COLOR))
+
+    frame.collapseButton = CreateFrame("Button", nil, frame)
+    frame.collapseButton:SetSize(NOTE_FLOAT_COLLAPSE_BUTTON_SIZE, NOTE_FLOAT_COLLAPSE_BUTTON_SIZE)
+    frame.collapseButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -NOTE_FLOAT_COLLAPSE_BUTTON_RIGHT_INSET, -NOTE_FLOAT_COLLAPSE_BUTTON_TOP_INSET)
+    frame.collapseButton.text = frame.collapseButton:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    frame.collapseButton.text:SetAllPoints()
+    do
+        local fontPath, _, fontFlags = frame.collapseButton.text:GetFont()
+        if fontPath then
+            frame.collapseButton.text:SetFont(fontPath, NOTE_FLOAT_COLLAPSE_BUTTON_FONT_SIZE, fontFlags)
+        end
+    end
+    frame.collapseButton.text:SetText("-")
+    frame.collapseButton.text:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_COLOR))
+    frame.collapseButton:SetScript("OnEnter", function(selfButton)
+        frame.isCollapseButtonHovered = true
+        selfButton.text:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_HOVER_COLOR))
+        RefreshFloatWindowHeaderButtonVisibility(frame)
+    end)
+    frame.collapseButton:SetScript("OnLeave", function(selfButton)
+        frame.isCollapseButtonHovered = nil
+        selfButton.text:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_COLOR))
+        RefreshFloatWindowHeaderButtonVisibility(frame)
+    end)
+    frame.collapseButton:SetScript("OnClick", function()
+        module:SetFloatWindowCollapsed(frame, not frame.isCollapsed)
+    end)
+
+    frame.titleText = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    frame.titleText:SetPoint("TOPLEFT", frame, "TOPLEFT", NOTE_FLOAT_TITLE_LEFT_INSET, -NOTE_FLOAT_TITLE_TOP_INSET)
+    frame.titleText:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -NOTE_FLOAT_TITLE_RIGHT_INSET, -NOTE_FLOAT_TITLE_TOP_INSET)
+    frame.titleText:SetJustifyH("LEFT")
+    frame.titleText:SetJustifyV("MIDDLE")
+    frame.titleText:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_COLOR))
+    frame.titleText:SetWordWrap(false)
+    if frame.titleText.SetMaxLines then
+        frame.titleText:SetMaxLines(1)
+    end
+    frame.titleText:Hide()
 
     frame.lockButton = CreateFrame("Button", nil, frame)
     frame.lockButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -NOTE_FLOAT_LOCK_TEXT_RIGHT_INSET, NOTE_FLOAT_LOCK_TEXT_BOTTOM_INSET)
@@ -499,16 +661,30 @@ function module:CreateFloatWindow()
     frame.resizeGrip = CreateFrame("Button", nil, frame)
     frame.resizeGrip:SetSize(NOTE_FLOAT_RESIZE_GRIP_SIZE, NOTE_FLOAT_RESIZE_GRIP_SIZE)
     frame.resizeGrip:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -NOTE_FLOAT_RESIZE_GRIP_RIGHT_INSET, NOTE_FLOAT_RESIZE_GRIP_BOTTOM_INSET)
-    frame.resizeGrip.text = frame.resizeGrip:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-    frame.resizeGrip.text:SetAllPoints()
-    frame.resizeGrip.text:SetText("+")
-    frame.resizeGrip.text:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_COLOR))
+    frame.resizeGrip.texture = frame.resizeGrip:CreateTexture(nil, "ARTWORK")
+    frame.resizeGrip.texture:SetAllPoints()
+    frame.resizeGrip.texture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    frame.resizeGrip.texture:SetAlpha(NOTE_FLOAT_RESIZE_GRIP_ALPHA)
+    frame.resizeGrip.highlightTexture = frame.resizeGrip:CreateTexture(nil, "OVERLAY")
+    frame.resizeGrip.highlightTexture:SetAllPoints()
+    frame.resizeGrip.highlightTexture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    frame.resizeGrip.highlightTexture:SetAlpha(0)
     frame.resizeGrip:RegisterForDrag("LeftButton")
     frame.resizeGrip:SetScript("OnEnter", function(selfButton)
-        selfButton.text:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_HOVER_COLOR))
+        if selfButton.texture then
+            selfButton.texture:SetAlpha(NOTE_FLOAT_RESIZE_GRIP_HOVER_ALPHA)
+        end
+        if selfButton.highlightTexture then
+            selfButton.highlightTexture:SetAlpha(NOTE_FLOAT_RESIZE_GRIP_HOVER_ALPHA)
+        end
     end)
     frame.resizeGrip:SetScript("OnLeave", function(selfButton)
-        selfButton.text:SetTextColor(unpack(NOTE_FLOAT_CONTROL_TEXT_COLOR))
+        if selfButton.texture then
+            selfButton.texture:SetAlpha(NOTE_FLOAT_RESIZE_GRIP_ALPHA)
+        end
+        if selfButton.highlightTexture then
+            selfButton.highlightTexture:SetAlpha(0)
+        end
     end)
     frame.resizeGrip:SetScript("OnMouseDown", function(_, button)
         if button == "LeftButton" and not frame.isLocked then
@@ -560,10 +736,12 @@ function module:CreateFloatWindow()
     end)
     frame:SetScript("OnEnter", function(selfFrame)
         selfFrame.isMouseOver = true
+        RefreshFloatWindowHeaderButtonVisibility(selfFrame)
         RefreshFloatWindowLockButtonVisibility(selfFrame)
     end)
     frame:SetScript("OnLeave", function(selfFrame)
         selfFrame.isMouseOver = nil
+        RefreshFloatWindowHeaderButtonVisibility(selfFrame)
         RefreshFloatWindowLockButtonVisibility(selfFrame)
     end)
     frame:SetScript("OnHide", function(selfFrame)
@@ -571,6 +749,8 @@ function module:CreateFloatWindow()
         module:SaveFloatWindowGeometry(selfFrame)
         selfFrame.noteId = nil
         selfFrame.isMouseOver = nil
+        selfFrame.isCloseButtonHovered = nil
+        selfFrame.isCollapseButtonHovered = nil
         selfFrame.isLockButtonHovered = nil
         if selfFrame.readView then
             selfFrame.readView.noteId = nil
@@ -579,6 +759,18 @@ function module:CreateFloatWindow()
         module:UpdateReadItemInfoEventRegistration()
     end)
     frame:SetScript("OnSizeChanged", function(selfFrame, width, height)
+        if selfFrame.isCollapsed then
+            if not selfFrame.enforcingSize and math.abs(height - NOTE_FLOAT_COLLAPSED_HEIGHT) > 0.5 then
+                selfFrame.enforcingSize = true
+                selfFrame:SetHeight(NOTE_FLOAT_COLLAPSED_HEIGHT)
+                selfFrame.enforcingSize = false
+                return
+            end
+
+            module:SaveFloatWindowGeometry(selfFrame)
+            return
+        end
+
         if selfFrame.isSizingByGrip and not HasResizeCursorMoved(selfFrame) then
             local resizeStartState = selfFrame.resizeStartState
             if resizeStartState and not selfFrame.enforcingSize then
@@ -609,11 +801,15 @@ function module:CreateFloatWindow()
         ApplyFloatWindowBackgroundAlpha(selfFrame)
         ApplyFloatWindowBorderVisibility(selfFrame)
         UpdateFloatWindowInteractionState(selfFrame)
+        ApplyFloatWindowCollapsedState(selfFrame)
+        RefreshFloatWindowHeaderButtonVisibility(selfFrame)
         RefreshFloatWindowLockButtonVisibility(selfFrame)
         module:UpdateFloatRenderSettings(selfFrame.readView)
     end)
 
     UpdateFloatWindowInteractionState(frame)
+    ApplyFloatWindowCollapsedState(frame)
+    RefreshFloatWindowHeaderButtonVisibility(frame)
     RefreshFloatWindowLockButtonVisibility(frame)
     ApplyFloatWindowBorderVisibility(frame)
 

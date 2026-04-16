@@ -68,13 +68,22 @@ local function IsFloatListLineType(lineType)
     return lineType == "bullet" or lineType == "numbered" or lineType == "taskUnchecked" or lineType == "taskChecked"
 end
 
-local function GetFloatChunkFontPath(style)
+local function IsFloatHeaderLineType(lineType)
+    return lineType == "h1" or lineType == "h2" or lineType == "h3"
+end
+
+local function GetFloatChunkFontPath(style, lineType)
     if style == "bolditalic" then
         return FONT_BOLDITALIC
     elseif style == "bold" then
         return FONT_BOLD
     elseif style == "italic" then
+        if IsFloatHeaderLineType(lineType) then
+            return FONT_BOLDITALIC or FONT_BOLD or FONT_ITALIC or FONT_REGULAR
+        end
         return FONT_ITALIC
+    elseif IsFloatHeaderLineType(lineType) then
+        return FONT_BOLD or FONT_REGULAR
     end
 
     return FONT_REGULAR
@@ -130,25 +139,12 @@ end
 
 local function ResolveFloatTaskTargetTab(noteId)
     if not noteId then
-        if module.PrintMessage then
-            module:PrintMessage("[float-task-debug] resolve noteId=nil real=false proxy=false target=nil")
-        end
         return nil
     end
 
     local realTab = module:GetOpenTabForNoteId(noteId)
     local proxyTab = realTab and nil or module:GetFloatWindowProxyTab(noteId)
     local targetTab = realTab or proxyTab
-    if module.PrintMessage then
-        module:PrintMessage(string.format(
-            "[float-task-debug] resolve noteId=%s real=%s proxy=%s isFloatProxy=%s targetNoteId=%s",
-            tostring(noteId),
-            realTab and "true" or "false",
-            proxyTab and "true" or "false",
-            targetTab and targetTab.isFloatProxy and "true" or "false",
-            targetTab and targetTab.noteData and tostring(targetTab.noteData.noteId) or "nil"
-        ))
-    end
     return targetTab
 end
 
@@ -316,13 +312,6 @@ local function GetOrCreateFloatLineRow(view, index)
     row.markerButton:SetScript("OnClick", function(buttonFrame)
         local noteId = buttonFrame.noteId
         local sourceLineIndex = buttonFrame.sourceLineIndex
-        if module.PrintMessage then
-            module:PrintMessage(string.format(
-                "[float-task-debug] click noteId=%s sourceLineIndex=%s",
-                tostring(noteId),
-                tostring(sourceLineIndex)
-            ))
-        end
         if not noteId or not sourceLineIndex then
             return
         end
@@ -500,7 +489,7 @@ local function RenderFloatInlineRow(view, row, entry, segments)
     for _, segmentData in ipairs(segments or {}) do
         local segmentUnits = SplitFloatSegmentIntoUnits(segmentData)
         for _, unit in ipairs(segmentUnits) do
-            local fontPath = GetFloatChunkFontPath(segmentData.style)
+            local fontPath = GetFloatChunkFontPath(segmentData.style, lineType)
             local fontSize = segmentData.style == "code" and GetFloatLineFontSize("code") or baseFontSize
             local unitWidth, unitHeight = MeasureFloatText(row, unit.text, fontPath, fontSize)
             if segmentData.style == "code" then

@@ -941,19 +941,7 @@ local function SplitNoteBodyTextIntoLines(bodyText)
 end
 
 function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
-    if self.PrintMessage then
-        self:PrintMessage(string.format(
-            "[float-task-debug] toggle-entry sourceLineIndex=%s tab=%s isFloatProxy=%s noteId=%s",
-            tostring(sourceLineIndex),
-            tab and "true" or "false",
-            tab and tab.isFloatProxy and "true" or "false",
-            tab and tab.noteData and tostring(tab.noteData.noteId) or "nil"
-        ))
-    end
     if not tab or not sourceLineIndex then
-        if self.PrintMessage then
-            self:PrintMessage("[float-task-debug] toggle-return reason=missing-tab-or-line")
-        end
         return false
     end
 
@@ -962,9 +950,6 @@ function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
     local targetIndex = tonumber(sourceLineIndex)
     local targetLine = targetIndex and lines[targetIndex] or nil
     if not targetLine then
-        if self.PrintMessage then
-            self:PrintMessage("[float-task-debug] toggle-return reason=missing-target-line")
-        end
         return false
     end
 
@@ -973,19 +958,9 @@ function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
         toggledLine, replacementCount = string.gsub(targetLine, "^(%-%s+)%[[xX]%](%s+.*)$", "%1[]%2", 1)
     end
     if replacementCount == 0 or toggledLine == targetLine then
-        if self.PrintMessage then
-            self:PrintMessage("[float-task-debug] toggle-return reason=no-toggle-match")
-        end
         return false
     end
 
-    if self.PrintMessage then
-        self:PrintMessage(string.format(
-            "[float-task-debug] mutate noteId=%s sourceLineIndex=%s",
-            tab and tab.noteData and tostring(tab.noteData.noteId) or "nil",
-            tostring(sourceLineIndex)
-        ))
-    end
     lines[targetIndex] = toggledLine
     local updatedBody = table.concat(lines, "\n")
     local panel = tab.panel
@@ -1008,13 +983,6 @@ function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
 
     tab.noteData = tab.noteData or {}
     tab.noteData.body = updatedBody
-    if self.PrintMessage then
-        self:PrintMessage(string.format(
-            "[float-task-debug] mutate-success noteId=%s sourceLineIndex=%s",
-            tab and tab.noteData and tostring(tab.noteData.noteId) or "nil",
-            tostring(sourceLineIndex)
-        ))
-    end
 
     self:HandleNoteTabContentChanged(tab)
     self:RefreshNoteReadView(tab, true)
