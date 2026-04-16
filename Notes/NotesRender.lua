@@ -51,7 +51,6 @@ local READ_INLINE_CODE_PADDING_Y = 2
 local READ_CODE_LINE_SPACING = 2
 local READ_CODE_BLOCK_PADDING_X = 8
 local READ_CODE_BLOCK_PADDING_Y = 6
-
 local function IsReadListLineType(lineType)
     return lineType == "bullet" or lineType == "numbered" or lineType == "taskUnchecked" or lineType == "taskChecked"
 end
@@ -501,6 +500,10 @@ local function BuildReadViewRenderPlan(bodyText)
     return entries, anchorIds
 end
 
+function module:BuildReadViewRenderPlan(bodyText)
+    return BuildReadViewRenderPlan(bodyText)
+end
+
 function module:GetOrCreateNoteReadLineRow(view, index)
     view.bodyLines = view.bodyLines or {}
     local row = view.bodyLines[index]
@@ -508,7 +511,7 @@ function module:GetOrCreateNoteReadLineRow(view, index)
         return row
     end
 
-    row = CreateFrame("Frame", nil, view.bodyContent)
+    row = CreateFrame("Frame", nil, view.bodyRenderRoot or view.bodyContent)
     row:SetHeight(1)
 
     row.bullet = row:CreateFontString(nil, "ARTWORK", "ChatFontNormal")
@@ -663,7 +666,7 @@ function module:RefreshReadTaskToggleButton(row)
         toggleButton:SetPoint("TOPLEFT", row.bullet, "TOPLEFT", 0, 0)
         toggleButton:SetSize(
             math.max(row.bullet:GetStringWidth() or 0, 1),
-            math.max(row.bullet:GetStringHeight() or 0, READ_LINE_FONT_SIZE)
+            math.max(row.bullet:GetStringHeight() or 0, self:GetReadViewFontSizeForLine("plain", readView))
         )
         toggleButton:Show()
         return
@@ -674,29 +677,60 @@ function module:RefreshReadTaskToggleButton(row)
         toggleButton:SetPoint("TOPLEFT", markerWidget, "TOPLEFT", 0, 0)
         toggleButton:SetSize(
             math.max(markerWidget:GetStringWidth() or 0, 1),
-            math.max(markerWidget:GetStringHeight() or 0, READ_LINE_FONT_SIZE)
+            math.max(markerWidget:GetStringHeight() or 0, self:GetReadViewFontSizeForLine("plain", readView))
         )
         toggleButton:Show()
     end
 end
 
-function module:GetReadViewLineSpacing(previousLineType, currentLineType)
+function module:GetReadViewRenderScale(view)
+    return 1
+end
+
+function module:GetScaledReadViewMetric(view, metric, minimum)
+    local scaledMetric = (tonumber(metric) or 0) * self:GetReadViewRenderScale(view)
+    local roundedMetric = math.floor(scaledMetric + 0.5)
+    if minimum ~= nil then
+        return math.max(roundedMetric, minimum)
+    end
+
+    return roundedMetric
+end
+
+function module:GetReadViewFontSizeForLine(lineType, view)
+    local baseFontSize = READ_LINE_FONT_SIZE
+    if lineType == "h1" then
+        baseFontSize = READ_HEADER1_FONT_SIZE
+    elseif lineType == "h2" then
+        baseFontSize = READ_HEADER2_FONT_SIZE
+    elseif lineType == "h3" then
+        baseFontSize = READ_HEADER3_FONT_SIZE
+    end
+
+    return self:GetScaledReadViewMetric(view, baseFontSize, 1)
+end
+
+function module:GetReadViewLayoutWidth(view, includeScrollbar)
+    return self:GetNoteReadBodyVisibleWidth(view, includeScrollbar)
+end
+
+function module:GetReadViewLineSpacing(previousLineType, currentLineType, view)
     if previousLineType == "h1" or previousLineType == "h2" or previousLineType == "h3" then
-        return READ_HEADER_VERTICAL_SPACING
+        return self:GetScaledReadViewMetric(view, READ_HEADER_VERTICAL_SPACING, 0)
     end
 
     if previousLineType == "separator" or currentLineType == "separator" then
-        return 6
+        return self:GetScaledReadViewMetric(view, 6, 0)
     end
 
     if IsReadListLineType(previousLineType) and not IsReadListLineType(currentLineType) then
-        return READ_POST_BULLET_BLOCK_SPACING
+        return self:GetScaledReadViewMetric(view, READ_POST_BULLET_BLOCK_SPACING, 0)
     end
 
     if (previousLineType == "plain" or previousLineType == "bold" or previousLineType == "italic")
         and (currentLineType == "plain" or currentLineType == "bold" or currentLineType == "italic")
     then
-        return READ_LINE_VERTICAL_SPACING
+        return self:GetScaledReadViewMetric(view, READ_LINE_VERTICAL_SPACING, 0)
     end
 
     return 0
@@ -737,6 +771,12 @@ function module:ShouldListenForReadItemInfoUpdates()
     local previewWindow = self.runtime.previewWindow
     local previewView = previewWindow and previewWindow.readView or nil
     if previewWindow and previewWindow:IsShown() and previewView and previewView.hasPendingReadItemInfo then
+        return true
+    end
+
+    local floatWindow = self.runtime.floatWindow
+    local floatView = floatWindow and floatWindow.readView or nil
+    if floatWindow and floatWindow:IsShown() and floatView and floatView.hasPendingReadItemInfo then
         return true
     end
 
@@ -848,7 +888,7 @@ function module:GetReadViewRowAvailableWidth(row)
         width = parent and parent:GetWidth() or 0
     end
 
-    return math.max(width - (NOTE_TAB_FIELD_INNER_X * 2), 1)
+    return math.max(width - (self:GetScaledReadViewMetric(row.readView, NOTE_TAB_FIELD_INNER_X, 0) * 2), 1)
 end
 
 function module:TryApplyReadViewAtlas(row, atlasData)
@@ -1166,6 +1206,102 @@ function module:ResolveReadListMarkerText(markerWidget, lineType, markerText)
     return markerText or GetReadTaskMarkerGlyph(lineType)
 end
 
+function module:BuildResolvedReadViewSegments(displayText, lineType, readView, pendingItemIds, anchorIds, markerText, isCenteredList)
+    local segments = ParseReadViewInlineSegments(displayText or "")
+    if isCenteredList and markerText and markerText ~= "" then
+        markerText = self:ResolveReadListMarkerText(nil, lineType, markerText)
+        table.insert(segments, 1, {
+            kind = "text",
+            style = "plain",
+            text = markerText .. " ",
+            displayText = markerText .. " ",
+            textColor = lineType == "taskChecked" and READ_TASK_CHECKED_MARKER_COLOR
+                or (lineType == "taskUnchecked" and READ_TASK_UNCHECKED_MARKER_COLOR or nil),
+        })
+    end
+
+    local formattedSegments = {}
+    local hasUnresolvedItemTokens = false
+
+    for _, segmentData in ipairs(segments) do
+        if segmentData.kind == "noteLink" then
+            local targetNote = segmentData.noteId and self:GetNoteById(segmentData.noteId) or nil
+            local isResolved = targetNote ~= nil
+            segmentData.isResolved = isResolved
+            segmentData.targetNote = targetNote
+            if isResolved then
+                segmentData.displayText = segmentData.linkText or ""
+                segmentData.textColor = READ_SAME_NOTE_LINK_COLOR
+                formattedSegments[#formattedSegments + 1] = string.format(
+                    "%s%s|r",
+                    GetColorCode(READ_SAME_NOTE_LINK_COLOR),
+                    segmentData.displayText or ""
+                )
+            else
+                segmentData.displayText = segmentData.text or ""
+                segmentData.textColor = READ_UNRESOLVED_ITEM_TOKEN_COLOR
+                formattedSegments[#formattedSegments + 1] = string.format(
+                    "%s%s|r",
+                    GetColorCode(READ_UNRESOLVED_ITEM_TOKEN_COLOR),
+                    segmentData.displayText or ""
+                )
+            end
+        elseif segmentData.kind == "itemToken" then
+            local resolvedText, isResolved, itemLink = self:ResolveReadViewItemTokenText(segmentData.itemId, segmentData.text)
+            segmentData.displayText = resolvedText
+            segmentData.isResolved = isResolved
+            segmentData.itemLink = itemLink
+            segmentData.textColor = isResolved and nil or READ_UNRESOLVED_ITEM_TOKEN_COLOR
+            if isResolved then
+                formattedSegments[#formattedSegments + 1] = resolvedText
+            else
+                hasUnresolvedItemTokens = true
+                self:TrackPendingReadItemId(pendingItemIds, segmentData.itemId)
+                formattedSegments[#formattedSegments + 1] = string.format(
+                    "|cff%02x%02x%02x%s|r",
+                    math.floor((READ_UNRESOLVED_ITEM_TOKEN_COLOR[1] or 1) * 255),
+                    math.floor((READ_UNRESOLVED_ITEM_TOKEN_COLOR[2] or 1) * 255),
+                    math.floor((READ_UNRESOLVED_ITEM_TOKEN_COLOR[3] or 1) * 255),
+                    resolvedText or ""
+                )
+            end
+        elseif segmentData.kind == "anchorLink" then
+            local isResolved = anchorIds and anchorIds[segmentData.anchorId] and true or false
+            segmentData.isResolved = isResolved
+            segmentData.readView = readView
+            if isResolved then
+                segmentData.displayText = segmentData.linkText or ""
+                segmentData.textColor = READ_SAME_NOTE_LINK_COLOR
+                formattedSegments[#formattedSegments + 1] = string.format(
+                    "%s%s|r",
+                    GetColorCode(READ_SAME_NOTE_LINK_COLOR),
+                    segmentData.displayText or ""
+                )
+            else
+                segmentData.displayText = segmentData.text or ""
+                segmentData.textColor = READ_UNRESOLVED_ITEM_TOKEN_COLOR
+                formattedSegments[#formattedSegments + 1] = string.format(
+                    "%s%s|r",
+                    GetColorCode(READ_UNRESOLVED_ITEM_TOKEN_COLOR),
+                    segmentData.displayText or ""
+                )
+            end
+        else
+            segmentData.displayText = segmentData.text or ""
+            if segmentData.style == "code" then
+                segmentData.textColor = READ_INLINE_CODE_TEXT_COLOR
+            elseif lineType == "taskChecked" then
+                segmentData.textColor = READ_TASK_CHECKED_TEXT_COLOR
+            else
+                segmentData.textColor = nil
+            end
+            formattedSegments[#formattedSegments + 1] = segmentData.text or ""
+        end
+    end
+
+    return segments, formattedSegments, hasUnresolvedItemTokens, markerText
+end
+
 function module:RenderStyledReadSegments(row, lineType, segments, markerText, fallbackFontPath, fontSize, fontFlags)
     self:HideReadInteractiveRegions(row)
     self:HideReadSegmentBackgrounds(row)
@@ -1175,14 +1311,18 @@ function module:RenderStyledReadSegments(row, lineType, segments, markerText, fa
     row.text:SetText("")
     row.text:Hide()
 
-    local markerGap = 6
+    local bodyInnerX = self:GetScaledReadViewMetric(row.readView, NOTE_TAB_FIELD_INNER_X, 0)
+    local bodyInnerY = self:GetScaledReadViewMetric(row.readView, NOTE_TAB_FIELD_INNER_Y, 0)
+    local markerGap = self:GetScaledReadViewMetric(row.readView, 6, 0)
+    local inlineCodePaddingX = self:GetScaledReadViewMetric(row.readView, READ_INLINE_CODE_PADDING_X, 0)
+    local inlineCodePaddingY = self:GetScaledReadViewMetric(row.readView, READ_INLINE_CODE_PADDING_Y, 0)
     local hasLeadingMarker = IsReadListLineType(lineType) and row.bullet and row.bullet:IsShown() and not row.isCentered
-    local contentLeft = NOTE_TAB_FIELD_INNER_X
+    local contentLeft = bodyInnerX
     if hasLeadingMarker then
         contentLeft = contentLeft + (row.bullet:GetStringWidth() or 0) + markerGap
     end
 
-    local availableWidth = math.max((row:GetWidth() or 0) - contentLeft - NOTE_TAB_FIELD_INNER_X, 1)
+    local availableWidth = math.max((row:GetWidth() or 0) - contentLeft - bodyInnerX, 1)
     local layoutUnits = {}
 
     for _, segmentData in ipairs(segments or {}) do
@@ -1238,7 +1378,7 @@ function module:RenderStyledReadSegments(row, lineType, segments, markerText, fa
 
     local textIndex = 0
     local hoverIndex = 0
-    local yOffset = NOTE_TAB_FIELD_INNER_Y
+    local yOffset = bodyInnerY
 
     for _, lineData in ipairs(lines) do
         local centeredOffset = 0
@@ -1277,12 +1417,12 @@ function module:RenderStyledReadSegments(row, lineType, segments, markerText, fa
                 if chunkData.segmentData.style == "code" then
                     local background = self:GetOrCreateReadSegmentBackground(row, textIndex)
                     background:ClearAllPoints()
-                    background:SetPoint("TOPLEFT", textWidget, "TOPLEFT", -READ_INLINE_CODE_PADDING_X, READ_INLINE_CODE_PADDING_Y)
-                    background:SetPoint("BOTTOMRIGHT", textWidget, "BOTTOMRIGHT", READ_INLINE_CODE_PADDING_X, -READ_INLINE_CODE_PADDING_Y)
+                    background:SetPoint("TOPLEFT", textWidget, "TOPLEFT", -inlineCodePaddingX, inlineCodePaddingY)
+                    background:SetPoint("BOTTOMRIGHT", textWidget, "BOTTOMRIGHT", inlineCodePaddingX, -inlineCodePaddingY)
                     background:Show()
                     hoverAnchorRegion = background
-                    actualChunkWidth = actualChunkWidth + (READ_INLINE_CODE_PADDING_X * 2)
-                    actualChunkHeight = math.max(actualChunkHeight + (READ_INLINE_CODE_PADDING_Y * 2), actualChunkHeight)
+                    actualChunkWidth = actualChunkWidth + (inlineCodePaddingX * 2)
+                    actualChunkHeight = math.max(actualChunkHeight + (inlineCodePaddingY * 2), actualChunkHeight)
                 end
 
                 if (chunkData.segmentData.kind == "itemToken" or chunkData.segmentData.kind == "anchorLink" or chunkData.segmentData.kind == "noteLink")
@@ -1304,7 +1444,7 @@ function module:RenderStyledReadSegments(row, lineType, segments, markerText, fa
         yOffset = yOffset + math.max(lineData.height, fontSize)
     end
 
-    row.contentHeight = math.max(yOffset + NOTE_TAB_FIELD_INNER_Y, fontSize + (NOTE_TAB_FIELD_INNER_Y * 2), 1)
+    row.contentHeight = math.max(yOffset + bodyInnerY, fontSize + (bodyInnerY * 2), 1)
     self:RefreshReadTaskToggleButton(row)
 end
 
@@ -1315,8 +1455,16 @@ function module:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemId
 
     local fallbackFontPath, fontFlags = self:GetReadViewDefaultFont()
     local resolvedFontPath = self:GetReadViewFontPath(lineType, fallbackFontPath)
-    local fontSize = READ_LINE_FONT_SIZE
+    local fontSize = self:GetReadViewFontSizeForLine(lineType, readView)
     local isCenteredList = IsReadListLineType(lineType) and row.isCentered
+    local bodyInnerX = self:GetScaledReadViewMetric(readView, NOTE_TAB_FIELD_INNER_X, 0)
+    local bodyInnerY = self:GetScaledReadViewMetric(readView, NOTE_TAB_FIELD_INNER_Y, 0)
+    local markerGap = self:GetScaledReadViewMetric(readView, 6, 0)
+    local codePaddingX = self:GetScaledReadViewMetric(readView, READ_CODE_BLOCK_PADDING_X, 0)
+    local codePaddingY = self:GetScaledReadViewMetric(readView, READ_CODE_BLOCK_PADDING_Y, 0)
+    local codeLineSpacing = self:GetScaledReadViewMetric(readView, READ_CODE_LINE_SPACING, 0)
+    local separatorSideInset = self:GetScaledReadViewMetric(readView, READ_SEPARATOR_SIDE_INSET, 0)
+    local separatorThickness = self:GetScaledReadViewMetric(readView, READ_SEPARATOR_THICKNESS, 1)
 
     row.bullet:Hide()
     row.bullet:SetText("")
@@ -1344,21 +1492,9 @@ function module:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemId
     self:HideReadSegmentTexts(row)
     self:HideReadTaskToggleButton(row)
 
-    if lineType == "h1" then
-        fontSize = READ_HEADER1_FONT_SIZE
-    elseif lineType == "h2" then
-        fontSize = READ_HEADER2_FONT_SIZE
-    elseif lineType == "h3" then
-        fontSize = READ_HEADER3_FONT_SIZE
-    elseif lineType == "bold" then
-        fontSize = READ_LINE_FONT_SIZE
-    elseif lineType == "bolditalic" then
-        fontSize = READ_LINE_FONT_SIZE
-    elseif lineType == "italic" then
-        fontSize = READ_LINE_FONT_SIZE
-    elseif IsReadListLineType(lineType) then
+    if IsReadListLineType(lineType) then
         if not isCenteredList then
-            self:ApplyReadViewFont(row.bullet, fallbackFontPath, fallbackFontPath, READ_LINE_FONT_SIZE, fontFlags)
+            self:ApplyReadViewFont(row.bullet, fallbackFontPath, fallbackFontPath, self:GetReadViewFontSizeForLine("plain", readView), fontFlags)
             markerText = self:ResolveReadListMarkerText(row.bullet, lineType, markerText or "•")
             row.markerText = markerText
             row.bullet:SetText(markerText or "•")
@@ -1369,20 +1505,16 @@ function module:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemId
             end
             row.bullet:Show()
         end
-    elseif lineType == "separator" then
-        fontSize = READ_LINE_FONT_SIZE
-    elseif lineType == "blank" then
-        fontSize = READ_LINE_FONT_SIZE
     end
 
     row.text:ClearAllPoints()
     if IsReadListLineType(lineType) and not isCenteredList then
-        row.text:SetPoint("TOPLEFT", row.bullet, "TOPRIGHT", 6, 0)
-        row.text:SetPoint("TOPRIGHT", row, "TOPRIGHT", -NOTE_TAB_FIELD_INNER_X, -NOTE_TAB_FIELD_INNER_Y)
+        row.text:SetPoint("TOPLEFT", row.bullet, "TOPRIGHT", markerGap, 0)
+        row.text:SetPoint("TOPRIGHT", row, "TOPRIGHT", -bodyInnerX, -bodyInnerY)
         row.text:SetJustifyH("LEFT")
     else
-        row.text:SetPoint("TOPLEFT", row, "TOPLEFT", NOTE_TAB_FIELD_INNER_X, -NOTE_TAB_FIELD_INNER_Y)
-        row.text:SetPoint("TOPRIGHT", row, "TOPRIGHT", -NOTE_TAB_FIELD_INNER_X, -NOTE_TAB_FIELD_INNER_Y)
+        row.text:SetPoint("TOPLEFT", row, "TOPLEFT", bodyInnerX, -bodyInnerY)
+        row.text:SetPoint("TOPRIGHT", row, "TOPRIGHT", -bodyInnerX, -bodyInnerY)
         row.text:SetJustifyH(row.isCentered and "CENTER" or "LEFT")
     end
     self:ApplyReadViewFont(row.text, resolvedFontPath, fallbackFontPath, fontSize, fontFlags)
@@ -1408,9 +1540,9 @@ function module:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemId
         self:HideReadTaskToggleButton(row)
         if row.separator then
             row.separator:ClearAllPoints()
-            row.separator:SetPoint("LEFT", row, "LEFT", NOTE_TAB_FIELD_INNER_X + READ_SEPARATOR_SIDE_INSET, 0)
-            row.separator:SetPoint("RIGHT", row, "RIGHT", -(NOTE_TAB_FIELD_INNER_X + READ_SEPARATOR_SIDE_INSET), 0)
-            row.separator:SetHeight(READ_SEPARATOR_THICKNESS)
+            row.separator:SetPoint("LEFT", row, "LEFT", bodyInnerX + separatorSideInset, 0)
+            row.separator:SetPoint("RIGHT", row, "RIGHT", -(bodyInnerX + separatorSideInset), 0)
+            row.separator:SetHeight(separatorThickness)
             row.separator:Show()
         end
         return false
@@ -1427,10 +1559,11 @@ function module:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemId
             row.codeBackground:Show()
         end
         row.text:ClearAllPoints()
-        row.text:SetPoint("TOPLEFT", row, "TOPLEFT", NOTE_TAB_FIELD_INNER_X + READ_CODE_BLOCK_PADDING_X, -(NOTE_TAB_FIELD_INNER_Y + READ_CODE_BLOCK_PADDING_Y))
-        row.text:SetPoint("TOPRIGHT", row, "TOPRIGHT", -(NOTE_TAB_FIELD_INNER_X + READ_CODE_BLOCK_PADDING_X), -(NOTE_TAB_FIELD_INNER_Y + READ_CODE_BLOCK_PADDING_Y))
+        row.text:SetPoint("TOPLEFT", row, "TOPLEFT", bodyInnerX + codePaddingX, -(bodyInnerY + codePaddingY))
+        row.text:SetPoint("TOPRIGHT", row, "TOPRIGHT", -(bodyInnerX + codePaddingX), -(bodyInnerY + codePaddingY))
         row.text:SetJustifyH("LEFT")
         row.text:SetTextColor(unpack(READ_CODE_TEXT_COLOR))
+        row.text:SetSpacing(codeLineSpacing)
         row.text:SetText(tostring(displayText or ""))
         return false
     end
@@ -1450,97 +1583,17 @@ function module:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemId
         displayText = displayText and displayText.rawText or ""
     end
 
-    local segments = ParseReadViewInlineSegments(displayText or "")
-    if isCenteredList and markerText and markerText ~= "" then
-        markerText = self:ResolveReadListMarkerText(nil, lineType, markerText)
-        row.markerText = markerText
-        table.insert(segments, 1, {
-            kind = "text",
-            style = "plain",
-            text = markerText .. " ",
-            displayText = markerText .. " ",
-            textColor = lineType == "taskChecked" and READ_TASK_CHECKED_MARKER_COLOR
-                or (lineType == "taskUnchecked" and READ_TASK_UNCHECKED_MARKER_COLOR or nil),
-        })
-    end
-    local formattedSegments = {}
-    local hasUnresolvedItemTokens = false
-
-    for _, segmentData in ipairs(segments) do
-        if segmentData.kind == "noteLink" then
-            local targetNote = segmentData.noteId and self:GetNoteById(segmentData.noteId) or nil
-            local isResolved = targetNote ~= nil
-            segmentData.isResolved = isResolved
-            segmentData.targetNote = targetNote
-            if isResolved then
-                segmentData.displayText = segmentData.linkText or ""
-                segmentData.textColor = READ_SAME_NOTE_LINK_COLOR
-                formattedSegments[#formattedSegments + 1] = string.format(
-                    "%s%s|r",
-                    GetColorCode(READ_SAME_NOTE_LINK_COLOR),
-                    segmentData.displayText or ""
-                )
-            else
-                segmentData.displayText = segmentData.text or ""
-                segmentData.textColor = READ_UNRESOLVED_ITEM_TOKEN_COLOR
-                formattedSegments[#formattedSegments + 1] = string.format(
-                    "%s%s|r",
-                    GetColorCode(READ_UNRESOLVED_ITEM_TOKEN_COLOR),
-                    segmentData.displayText or ""
-                )
-            end
-        elseif segmentData.kind == "itemToken" then
-            local resolvedText, isResolved, itemLink = self:ResolveReadViewItemTokenText(segmentData.itemId, segmentData.text)
-            segmentData.displayText = resolvedText
-            segmentData.isResolved = isResolved
-            segmentData.itemLink = itemLink
-             segmentData.textColor = isResolved and nil or READ_UNRESOLVED_ITEM_TOKEN_COLOR
-            if isResolved then
-                formattedSegments[#formattedSegments + 1] = resolvedText
-            else
-                hasUnresolvedItemTokens = true
-                self:TrackPendingReadItemId(pendingItemIds, segmentData.itemId)
-                formattedSegments[#formattedSegments + 1] = string.format(
-                    "|cff%02x%02x%02x%s|r",
-                    math.floor((READ_UNRESOLVED_ITEM_TOKEN_COLOR[1] or 1) * 255),
-                    math.floor((READ_UNRESOLVED_ITEM_TOKEN_COLOR[2] or 1) * 255),
-                    math.floor((READ_UNRESOLVED_ITEM_TOKEN_COLOR[3] or 1) * 255),
-                    resolvedText or ""
-                )
-            end
-        elseif segmentData.kind == "anchorLink" then
-            local isResolved = anchorIds and anchorIds[segmentData.anchorId] and true or false
-            segmentData.isResolved = isResolved
-            segmentData.readView = readView
-            if isResolved then
-                segmentData.displayText = segmentData.linkText or ""
-                segmentData.textColor = READ_SAME_NOTE_LINK_COLOR
-                formattedSegments[#formattedSegments + 1] = string.format(
-                    "%s%s|r",
-                    GetColorCode(READ_SAME_NOTE_LINK_COLOR),
-                    segmentData.displayText or ""
-                )
-            else
-                segmentData.displayText = segmentData.text or ""
-                segmentData.textColor = READ_UNRESOLVED_ITEM_TOKEN_COLOR
-                formattedSegments[#formattedSegments + 1] = string.format(
-                    "%s%s|r",
-                    GetColorCode(READ_UNRESOLVED_ITEM_TOKEN_COLOR),
-                    segmentData.displayText or ""
-                )
-            end
-        else
-            segmentData.displayText = segmentData.text or ""
-            if segmentData.style == "code" then
-                segmentData.textColor = READ_INLINE_CODE_TEXT_COLOR
-            elseif lineType == "taskChecked" then
-                segmentData.textColor = READ_TASK_CHECKED_TEXT_COLOR
-            else
-                segmentData.textColor = nil
-            end
-            formattedSegments[#formattedSegments + 1] = segmentData.text or ""
-        end
-    end
+    local segments, formattedSegments, hasUnresolvedItemTokens, resolvedMarkerText = self:BuildResolvedReadViewSegments(
+        displayText,
+        lineType,
+        readView,
+        pendingItemIds,
+        anchorIds,
+        markerText,
+        isCenteredList
+    )
+    markerText = resolvedMarkerText
+    row.markerText = markerText
 
     row.inlineSegments = segments
     row.renderedLineType = lineType
@@ -1590,7 +1643,7 @@ function module:JumpToReadViewAnchor(view, anchorId)
         return false
     end
 
-    local contentTop = view.bodyContent and view.bodyContent:GetTop() or nil
+    local contentTop = (view.bodyRenderRoot or view.bodyContent) and (view.bodyRenderRoot or view.bodyContent):GetTop() or nil
     local rowTop = targetRow:GetTop()
     if not contentTop or not rowTop then
         return false
@@ -1598,7 +1651,82 @@ function module:JumpToReadViewAnchor(view, anchorId)
 
     local targetScroll = math.max(contentTop - rowTop, 0)
     local maxScroll = math.max(view.bodyScrollFrame.GetVerticalScrollRange and (view.bodyScrollFrame:GetVerticalScrollRange() or 0) or 0, 0)
-    view.bodyScrollFrame:SetVerticalScroll(math.max(0, math.min(targetScroll, maxScroll)))
+    local clampedScroll = math.max(0, math.min(targetScroll, maxScroll))
+    view.bodyScrollFrame:SetVerticalScroll(clampedScroll)
+    return true
+end
+
+function module:QueueReadViewScrollRestore(view, scrollOffset)
+    if not view or not view.bodyScrollFrame or scrollOffset == nil then
+        return false
+    end
+
+    view.pendingScrollRestoreOffset = tonumber(scrollOffset) or 0
+    return true
+end
+
+function module:ClampReadViewScrollOffset(view, scrollOffset)
+    if not view or not view.bodyScrollFrame then
+        return 0, 0
+    end
+
+    local maxScroll = math.max(view.bodyScrollFrame.GetVerticalScrollRange and (view.bodyScrollFrame:GetVerticalScrollRange() or 0) or 0, 0)
+    local clampedScrollOffset = math.max(0, math.min(tonumber(scrollOffset) or 0, maxScroll))
+    return clampedScrollOffset, maxScroll
+end
+
+function module:ApplyReadViewVerticalScroll(view, scrollOffset, maxScroll)
+    if not view or not view.bodyScrollFrame then
+        return
+    end
+
+    local scrollFrame = view.bodyScrollFrame
+    local clampedScrollOffset = math.max(0, math.min(tonumber(scrollOffset) or 0, tonumber(maxScroll) or 0))
+    local currentScrollOffset = scrollFrame:GetVerticalScroll() or 0
+
+    if math.abs(currentScrollOffset - clampedScrollOffset) < 0.01 and (tonumber(maxScroll) or 0) > 0 then
+        local nudgeOffset
+        if clampedScrollOffset > 0 then
+            nudgeOffset = math.max(clampedScrollOffset - 1, 0)
+        else
+            nudgeOffset = math.min(1, tonumber(maxScroll) or 0)
+        end
+
+        if math.abs(nudgeOffset - clampedScrollOffset) > 0.01 then
+            scrollFrame:SetVerticalScroll(nudgeOffset)
+        end
+    end
+
+    scrollFrame:SetVerticalScroll(clampedScrollOffset)
+end
+
+function module:ApplyPendingNoteReadViewScrollRestore(view)
+    if not view or not view.bodyScrollFrame or view.pendingScrollRestoreOffset == nil then
+        return false
+    end
+
+    if view.bodyScrollFrame.UpdateScrollChildRect then
+        view.bodyScrollFrame:UpdateScrollChildRect()
+    end
+
+    local requestedScrollOffset = tonumber(view.pendingScrollRestoreOffset) or 0
+    local clampedScrollOffset, maxScroll = self:ClampReadViewScrollOffset(view, requestedScrollOffset)
+    local visibleHeight = math.max(view.bodyScrollFrame:GetHeight() or 0, 0)
+    local contentHeight = math.max(((view.bodyRenderRoot or view.bodyContent) and (view.bodyRenderRoot or view.bodyContent):GetHeight()) or 0, 0)
+    if maxScroll <= 0 and requestedScrollOffset > 0 and contentHeight > (visibleHeight + 0.5) then
+        return false
+    end
+
+    local scrollBar = view.bodyScrollBar
+    if scrollBar and scrollBar.SetMinMaxValues then
+        scrollBar:SetMinMaxValues(0, maxScroll)
+    end
+    self:ApplyReadViewVerticalScroll(view, clampedScrollOffset, maxScroll)
+    if scrollBar and scrollBar.SetValue then
+        scrollBar:SetValue(clampedScrollOffset)
+    end
+
+    view.pendingScrollRestoreOffset = nil
     return true
 end
 
@@ -1607,35 +1735,43 @@ function module:GetReadViewLineRowHeight(row)
         return 1
     end
 
+    local readView = row.readView
+    local bodyInnerY = self:GetScaledReadViewMetric(readView, NOTE_TAB_FIELD_INNER_Y, 0)
+    local lineFontSize = self:GetReadViewFontSizeForLine("plain", readView)
+    local blankLineHeight = self:GetScaledReadViewMetric(readView, READ_BLANK_LINE_HEIGHT, 1)
+    local separatorRowHeight = self:GetScaledReadViewMetric(readView, READ_SEPARATOR_ROW_HEIGHT, 1)
+    local codePaddingY = self:GetScaledReadViewMetric(readView, READ_CODE_BLOCK_PADDING_Y, 0)
+
     if row.contentHeight and row.contentHeight > 0 then
         return math.max(row.contentHeight, 1)
     end
 
     if row.lineType == "blank" then
-        return math.max(READ_BLANK_LINE_HEIGHT, 1)
+        return math.max(blankLineHeight, 1)
     end
 
     if row.lineType == "separator" then
-        return math.max(READ_SEPARATOR_ROW_HEIGHT, 1)
+        return math.max(separatorRowHeight, 1)
     end
 
     if row.lineType == "code" then
         return math.max(
-            (row.text and row.text:GetStringHeight() or 0) + (NOTE_TAB_FIELD_INNER_Y * 2) + (READ_CODE_BLOCK_PADDING_Y * 2),
-            READ_LINE_FONT_SIZE + (NOTE_TAB_FIELD_INNER_Y * 2) + (READ_CODE_BLOCK_PADDING_Y * 2),
+            (row.text and row.text:GetStringHeight() or 0) + (bodyInnerY * 2) + (codePaddingY * 2),
+            lineFontSize + (bodyInnerY * 2) + (codePaddingY * 2),
             1
         )
     end
 
     if row.lineType == "atlas" and row.atlasHeight then
-        return math.max(row.atlasHeight + (NOTE_TAB_FIELD_INNER_Y * 2), 1)
+        return math.max(row.atlasHeight + (bodyInnerY * 2), 1)
     end
 
-    return math.max((row.text and row.text:GetStringHeight() or 0) + (NOTE_TAB_FIELD_INNER_Y * 2), 1)
+    return math.max((row.text and row.text:GetStringHeight() or 0) + (bodyInnerY * 2), 1)
 end
 
 function module:RefreshNoteReadLineRows(view, bodyText)
-    if not view or not view.bodyContent then
+    local contentParent = view and (view.bodyRenderRoot or view.bodyContent) or nil
+    if not view or not contentParent then
         return false
     end
 
@@ -1657,15 +1793,15 @@ function module:RefreshNoteReadLineRows(view, bodyText)
         row.anchorId = entry.anchorId
         row.sourceLineIndex = entry.sourceLineIndex
         row:ClearAllPoints()
-        row:SetPoint("LEFT", view.bodyContent, "LEFT", indentOffset, 0)
-        row:SetPoint("RIGHT", view.bodyContent, "RIGHT", 0, 0)
+        row:SetPoint("LEFT", contentParent, "LEFT", indentOffset, 0)
+        row:SetPoint("RIGHT", contentParent, "RIGHT", 0, 0)
 
         local rowHasUnresolvedItemTokens = self:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemIds, anchorIds, view, markerText)
         row.lineType = row.renderedLineType or lineType
         if previousRow then
-            row:SetPoint("TOPLEFT", previousRow, "BOTTOMLEFT", indentOffset - previousIndentOffset, -self:GetReadViewLineSpacing(previousLineType, row.lineType))
+            row:SetPoint("TOPLEFT", previousRow, "BOTTOMLEFT", indentOffset - previousIndentOffset, -self:GetReadViewLineSpacing(previousLineType, row.lineType, view))
         else
-            row:SetPoint("TOPLEFT", view.bodyContent, "TOPLEFT", indentOffset, 0)
+            row:SetPoint("TOPLEFT", contentParent, "TOPLEFT", indentOffset, 0)
         end
         row:SetHeight(self:GetReadViewLineRowHeight(row))
         row:Show()
@@ -1702,14 +1838,7 @@ function module:RefreshNoteReadLineRows(view, bodyText)
         if row and row:IsShown() and row.inlineSegments and not row.usesStyledSegments then
             local fallbackFontPath, fontFlags = self:GetReadViewDefaultFont()
             local resolvedFontPath = self:GetReadViewFontPath(row.renderedLineType or row.lineType, fallbackFontPath)
-            local fontSize = READ_LINE_FONT_SIZE
-            if row.lineType == "h1" then
-                fontSize = READ_HEADER1_FONT_SIZE
-            elseif row.lineType == "h2" then
-                fontSize = READ_HEADER2_FONT_SIZE
-            elseif row.lineType == "h3" then
-                fontSize = READ_HEADER3_FONT_SIZE
-            end
+            local fontSize = self:GetReadViewFontSizeForLine(row.lineType, view)
             self:RefreshReadInteractiveRegions(row, resolvedFontPath, fallbackFontPath, fontSize, fontFlags)
         end
         if row and row:IsShown() then
@@ -1731,14 +1860,7 @@ function module:RefreshNoteReadLineRowHeights(view)
         if row:IsShown() and row.text then
             if row.usesStyledSegments and row.inlineSegments then
                 local fallbackFontPath, fontFlags = self:GetReadViewDefaultFont()
-                local fontSize = READ_LINE_FONT_SIZE
-                if row.lineType == "h1" then
-                    fontSize = READ_HEADER1_FONT_SIZE
-                elseif row.lineType == "h2" then
-                    fontSize = READ_HEADER2_FONT_SIZE
-                elseif row.lineType == "h3" then
-                    fontSize = READ_HEADER3_FONT_SIZE
-                end
+                local fontSize = self:GetReadViewFontSizeForLine(row.lineType, view)
 
                 self:RenderStyledReadSegments(row, row.renderedLineType or row.lineType, row.inlineSegments, row.markerText, fallbackFontPath, fontSize, fontFlags)
             end
@@ -1798,7 +1920,6 @@ function module:UpdateStandaloneReadViewLayout(view)
     local scrollBar = view.bodyScrollBar
     local reserveScrollbar = scrollBar and scrollBar:IsShown() or false
     local rightInset = NOTE_TAB_BODY_NATIVE_RIGHT_INSET + (reserveScrollbar and (NOTE_TAB_BODY_SCROLLBAR_WIDTH + NOTE_TAB_BODY_SCROLLBAR_GAP) or 0)
-
     view.bodyScrollFrame:ClearAllPoints()
     view.bodyScrollFrame:SetPoint("TOPLEFT", view.bodyFrame, "TOPLEFT", NOTE_TAB_BODY_NATIVE_LEFT_INSET, -NOTE_TAB_BODY_NATIVE_TOP_INSET)
     view.bodyScrollFrame:SetPoint("BOTTOMRIGHT", view.bodyFrame, "BOTTOMRIGHT", -rightInset, NOTE_TAB_BODY_NATIVE_BOTTOM_INSET)
@@ -1810,20 +1931,30 @@ function module:UpdateStandaloneReadViewLayout(view)
         scrollBar:SetPoint("BOTTOMRIGHT", view.bodyFrame, "BOTTOMRIGHT", -(NOTE_TAB_BODY_SCROLLBAR_RIGHT_INSET - NOTE_TAB_BODY_SCROLLBAR_X_OFFSET), NOTE_TAB_BODY_NATIVE_BOTTOM_INSET + NOTE_TAB_BODY_SCROLLBAR_BOTTOM_INSET)
     end
 
-    view.bodyContent:SetWidth(self:GetNoteReadBodyVisibleWidth(view, reserveScrollbar))
+    view.bodyContent:ClearAllPoints()
+    view.bodyContent:SetPoint("TOPLEFT", view.bodyScrollFrame, "TOPLEFT", 0, 0)
+
+    view.bodyContent:SetWidth(self:GetReadViewLayoutWidth(view, reserveScrollbar))
     self:RefreshNoteReadLineRowHeights(view)
     view.bodyContent:SetHeight(self:GetNoteReadBodyContentHeight(view))
+    self:ApplyPendingNoteReadViewScrollRestore(view)
 end
 
-function module:RefreshNoteReadView(tab)
+function module:RefreshNoteReadView(tab, preserveScroll)
     local readView = self:GetNoteTabReadView(tab and tab.panel)
     if not readView then
         return
     end
 
+    local previousScrollOffset = nil
+    if preserveScroll and readView.bodyScrollFrame and readView.bodyScrollFrame.GetVerticalScroll then
+        previousScrollOffset = readView.bodyScrollFrame:GetVerticalScroll() or 0
+    end
+
     readView.ownerTab = tab
     local title = self:GetNoteTabStoredTitle(tab)
     local body = tab and tab.noteData and tab.noteData.body or DEFAULT_NOTE_BODY
+    self:QueueReadViewScrollRestore(readView, previousScrollOffset)
     self:RefreshStandaloneReadView(readView, title, body or DEFAULT_NOTE_BODY)
     tab.hasPendingReadItemInfo = readView.hasPendingReadItemInfo
     tab.pendingReadItemIds = readView.pendingReadItemIds

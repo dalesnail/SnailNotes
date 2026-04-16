@@ -12,5 +12,7 @@ Notes\NotesGuideData.lua
 Notes\Notes.lua
 Notes\NotesOptions.lua
 Notes\NotesRender.lua
+Notes\NotesFloatRender.lua
 Notes\NotesImportExport.lua
 Notes\NotesUI.lua
+Notes\NotesFloat.lua

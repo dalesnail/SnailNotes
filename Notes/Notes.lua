@@ -173,6 +173,10 @@ local NOTE_PREVIEW_WINDOW_WIDTH = 520
 local NOTE_PREVIEW_WINDOW_HEIGHT = 480
 local NOTE_PREVIEW_WINDOW_MIN_WIDTH = 360
 local NOTE_PREVIEW_WINDOW_MIN_HEIGHT = 280
+local NOTE_FLOAT_WINDOW_WIDTH = 620
+local NOTE_FLOAT_WINDOW_HEIGHT = 320
+local NOTE_FLOAT_WINDOW_MIN_WIDTH = 240
+local NOTE_FLOAT_WINDOW_MIN_HEIGHT = 180
 
 -- Module State
 local module
@@ -470,6 +474,20 @@ ns.SnailNotesDefaults = {
                 x = 300,
                 y = 0,
             },
+            float = {
+                noteId = nil,
+                width = NOTE_FLOAT_WINDOW_WIDTH,
+                height = NOTE_FLOAT_WINDOW_HEIGHT,
+                point = "CENTER",
+                relativePoint = "CENTER",
+                x = -300,
+                y = 0,
+                locked = false,
+                showTextures = true,
+                showBorder = false,
+                fontScale = 1,
+                backgroundAlpha = 0.18,
+            },
         },
         notes = {
             nextId = 1,
@@ -532,6 +550,7 @@ function module:GetSettings()
         self.db.profile.window = self.db.profile.window or {}
         self.db.profile.notes = self.db.profile.notes or {}
         self.db.profile.window.preview = self.db.profile.window.preview or {}
+        self.db.profile.window.float = self.db.profile.window.float or {}
         self.db.profile.notes.items = self.db.profile.notes.items or {}
         if self.db.profile.notes.nextId == nil then
             self.db.profile.notes.nextId = defaults.notes and defaults.notes.nextId or 1
@@ -620,6 +639,12 @@ function module:GetOrderedNotes()
             return left.isBuiltin and true or false
         end
 
+        local leftPinned = left.isBuiltin or left.pinned == true
+        local rightPinned = right.isBuiltin or right.pinned == true
+        if leftPinned ~= rightPinned then
+            return leftPinned and true or false
+        end
+
         local leftUpdated = tonumber(left.updatedAt) or tonumber(left.createdAt) or 0
         local rightUpdated = tonumber(right.updatedAt) or tonumber(right.createdAt) or 0
         if leftUpdated ~= rightUpdated then
@@ -649,6 +674,36 @@ function module:GetNoteById(noteId)
     end
 
     return self:GetNotesTable()[noteId]
+end
+
+function module:IsNotePinned(noteId)
+    if not noteId or self:IsBuiltinNoteId(noteId) then
+        return false
+    end
+
+    local note = self:GetNotesTable()[noteId]
+    return note and note.pinned == true or false
+end
+
+function module:SetNotePinned(noteId, pinned)
+    if not noteId or self:IsBuiltinNoteId(noteId) then
+        return false
+    end
+
+    local note = self:GetNotesTable()[noteId]
+    if not note then
+        return false
+    end
+
+    local normalizedPinned = pinned == true
+    if note.pinned == normalizedPinned then
+        return true
+    end
+
+    note.pinned = normalizedPinned
+    self:RefreshHomeList()
+    self:RefreshRowActionMenu()
+    return true
 end
 
 function module:BuildNoteLinkString(noteId, titleOverride)
@@ -859,7 +914,7 @@ end
 function module:GetNoteTabWorkingValues(tab)
     local view = self:GetNoteTabEditView(tab and tab.panel)
     if not view then
-        return self:GetNoteTabStoredTitle(tab), DEFAULT_NOTE_BODY
+        return self:GetNoteTabStoredTitle(tab), tab and tab.noteData and tab.noteData.body or DEFAULT_NOTE_BODY
     end
 
     local titleText = view.titleInput and view.titleInput:GetText() or nil
@@ -886,7 +941,19 @@ local function SplitNoteBodyTextIntoLines(bodyText)
 end
 
 function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
-    if not tab or not tab.panel or not sourceLineIndex then
+    if self.PrintMessage then
+        self:PrintMessage(string.format(
+            "[float-task-debug] toggle-entry sourceLineIndex=%s tab=%s isFloatProxy=%s noteId=%s",
+            tostring(sourceLineIndex),
+            tab and "true" or "false",
+            tab and tab.isFloatProxy and "true" or "false",
+            tab and tab.noteData and tostring(tab.noteData.noteId) or "nil"
+        ))
+    end
+    if not tab or not sourceLineIndex then
+        if self.PrintMessage then
+            self:PrintMessage("[float-task-debug] toggle-return reason=missing-tab-or-line")
+        end
         return false
     end
 
@@ -895,6 +962,9 @@ function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
     local targetIndex = tonumber(sourceLineIndex)
     local targetLine = targetIndex and lines[targetIndex] or nil
     if not targetLine then
+        if self.PrintMessage then
+            self:PrintMessage("[float-task-debug] toggle-return reason=missing-target-line")
+        end
         return false
     end
 
@@ -903,9 +973,19 @@ function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
         toggledLine, replacementCount = string.gsub(targetLine, "^(%-%s+)%[[xX]%](%s+.*)$", "%1[]%2", 1)
     end
     if replacementCount == 0 or toggledLine == targetLine then
+        if self.PrintMessage then
+            self:PrintMessage("[float-task-debug] toggle-return reason=no-toggle-match")
+        end
         return false
     end
 
+    if self.PrintMessage then
+        self:PrintMessage(string.format(
+            "[float-task-debug] mutate noteId=%s sourceLineIndex=%s",
+            tab and tab.noteData and tostring(tab.noteData.noteId) or "nil",
+            tostring(sourceLineIndex)
+        ))
+    end
     lines[targetIndex] = toggledLine
     local updatedBody = table.concat(lines, "\n")
     local panel = tab.panel
@@ -919,7 +999,7 @@ function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
         if previousCursorPosition and editView.bodyInput.SetCursorPosition then
             editView.bodyInput:SetCursorPosition(math.max(math.min(previousCursorPosition, string.len(updatedBody)), 0))
         end
-        if previousScrollOffset and editView.bodyScrollFrame and editView.bodyScrollFrame.GetVerticalScrollRange then
+        if previousScrollOffset ~= nil and editView.bodyScrollFrame and editView.bodyScrollFrame.GetVerticalScrollRange then
             local maxScroll = math.max(editView.bodyScrollFrame:GetVerticalScrollRange() or 0, 0)
             editView.bodyScrollFrame:SetVerticalScroll(math.max(0, math.min(previousScrollOffset, maxScroll)))
         end
@@ -928,15 +1008,24 @@ function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
 
     tab.noteData = tab.noteData or {}
     tab.noteData.body = updatedBody
+    if self.PrintMessage then
+        self:PrintMessage(string.format(
+            "[float-task-debug] mutate-success noteId=%s sourceLineIndex=%s",
+            tab and tab.noteData and tostring(tab.noteData.noteId) or "nil",
+            tostring(sourceLineIndex)
+        ))
+    end
 
     self:HandleNoteTabContentChanged(tab)
-    self:RefreshNoteReadView(tab)
+    self:RefreshNoteReadView(tab, true)
     self:ScheduleNoteTaskToggleAutosave(tab)
 
     local previewOwner = self:GetPreviewOwnerTab()
     if previewOwner == tab then
         self:RefreshNotePreview(tab)
     end
+
+    self:RefreshFloatWindow()
 
     return true
 end
@@ -1028,6 +1117,9 @@ function module:RefreshNoteTabControls(tab)
     end
     if readView and readView.linkButton then
         readView.linkButton:SetEnabled(hasSavedNote)
+    end
+    if readView and readView.floatButton then
+        readView.floatButton:SetEnabled(hasSavedNote)
     end
 
     if editView and editView.modeButton then
@@ -1245,6 +1337,11 @@ end
 
 function module:HandleNoteTabContentChanged(tab)
     local panel = tab and tab.panel
+    if tab and tab.isFloatProxy then
+        self:SetNoteTabDirty(tab, true)
+        return
+    end
+
     if not panel or panel.isLoadingView then
         return
     end
@@ -1295,7 +1392,7 @@ function module:ScheduleNoteTaskToggleAutosave(tab)
         end
 
         tab.taskToggleAutosaveTimer = nil
-        if not tab.panel or not tab.assigned or not tab.dirty or not tab.noteData or self:IsBuiltinNoteId(tab.noteData.noteId) then
+        if (not tab.panel and not tab.isFloatProxy) or not tab.assigned or not tab.dirty or not tab.noteData or self:IsBuiltinNoteId(tab.noteData.noteId) then
             return
         end
 
@@ -1304,6 +1401,7 @@ function module:ScheduleNoteTaskToggleAutosave(tab)
         module:SaveNoteTabInternal(tab, {
             allowBlankTitle = true,
             keepEditMode = module:IsNoteTabInEditMode(tab),
+            preserveReadScroll = true,
         })
     end
 
@@ -1476,7 +1574,7 @@ function module:GetNoteReadBodyTextHeight(view)
         if row:IsShown() then
             textHeight = textHeight + math.max(row:GetHeight() or 0, 0)
             if previousLineType then
-                textHeight = textHeight + self:GetReadViewLineSpacing(previousLineType, row.lineType)
+                textHeight = textHeight + self:GetReadViewLineSpacing(previousLineType, row.lineType, view)
             end
             previousLineType = row.lineType
         end
@@ -1533,11 +1631,12 @@ function module:GetNoteReadBodyContentHeight(view)
     return math.max(contentHeight, 1)
 end
 
-function module:ApplyTabMode(tab)
+function module:ApplyTabMode(tab, options)
     if not tab or not tab.panel then
         return
     end
 
+    options = options or {}
     local panel = tab.panel
     local editView = self:GetNoteTabEditView(panel)
     local readView = self:GetNoteTabReadView(panel)
@@ -1565,13 +1664,13 @@ function module:ApplyTabMode(tab)
     if isEditMode then
         self:UpdateNoteBodyEditLayout(tab)
     else
-        self:RefreshNoteReadView(tab)
+        self:RefreshNoteReadView(tab, options.preserveReadScroll)
     end
 
     self:RefreshNotePreviewVisibility()
 end
 
-function module:SetNoteTabMode(tab, mode)
+function module:SetNoteTabMode(tab, mode, options)
     if not tab then
         return
     end
@@ -1585,7 +1684,7 @@ function module:SetNoteTabMode(tab, mode)
         tab.mode = "edit"
     end
 
-    self:ApplyTabMode(tab)
+    self:ApplyTabMode(tab, options)
     self:RefreshNoteTabControls(tab)
     self:UpdateReadItemInfoEventRegistration()
 end
@@ -1683,6 +1782,7 @@ function module:RefreshSavedNoteReferences(tab)
     self:RefreshNoteTabControls(tab)
     self:RefreshHomeList()
     self:RefreshRowActionMenu()
+    self:RefreshFloatWindow()
 end
 
 function module:SaveNoteTabInternal(tab, options)
@@ -1719,6 +1819,7 @@ function module:SaveNoteTabInternal(tab, options)
         note = {
             id = self:BuildNextNoteId(),
             createdAt = now,
+            pinned = false,
         }
         self:GetNotesTable()[note.id] = note
         tab.noteData.noteId = note.id
@@ -1732,6 +1833,9 @@ function module:SaveNoteTabInternal(tab, options)
     note.body = body
     note.updatedAt = now
     note.createdAt = note.createdAt or now
+    if note.pinned == nil then
+        note.pinned = false
+    end
 
     tab.noteData.title = title
     tab.noteData.body = body
@@ -1747,9 +1851,11 @@ function module:SaveNoteTabInternal(tab, options)
     self:CancelNoteTaskToggleAutosave(tab)
     self:SetSelectedNote(note.id)
     self:SetNoteTabDirty(tab, false)
-    self:RefreshNoteReadView(tab)
+    self:RefreshNoteReadView(tab, options.preserveReadScroll)
     if not options.keepEditMode then
-        self:SetNoteTabMode(tab, "read")
+        self:SetNoteTabMode(tab, "read", {
+            preserveReadScroll = options.preserveReadScroll,
+        })
     else
         self:RefreshNoteTabControls(tab)
         self:UpdateReadItemInfoEventRegistration()
@@ -1895,6 +2001,12 @@ function module:DeleteNote(noteId)
         self.runtime.selectedNoteId = nil
     end
 
+    if self:IsFloatWindowShowingNote(noteId) then
+        local floatSettings = self:GetFloatWindowSettings()
+        floatSettings.noteId = nil
+        self:HideFloatWindow()
+    end
+
     self:HideRowActionMenu()
     self:Refresh()
 end
@@ -1969,6 +2081,7 @@ function module:OpenAssignedNoteTab(slotIndex, note, keepCurrentTabActive)
 
         self:RefreshNotePanel(tab)
         self:RefreshTabLayout()
+        self:RefreshFloatWindow()
         if not keepCurrentTabActive then
             self:SelectTab(tab.key)
         end
@@ -2026,6 +2139,7 @@ function module:CloseAssignedNoteTab(slotIndex)
 
     self:RefreshTabLayout()
     self:SelectTab(self.runtime.activeTabKey or "home")
+    self:RefreshFloatWindow()
 end
 
 function module:CloseTab(tab)
@@ -2104,6 +2218,29 @@ function module:OpenNote(noteId, openInNewTab, keepCurrentTabActive)
     return true
 end
 
+function module:OpenNoteInEditMode(noteId)
+    if not noteId then
+        return false
+    end
+
+    self:OpenWindow()
+    if not self:OpenNote(noteId, false, false) then
+        return false
+    end
+
+    local tab = self:GetOpenTabForNoteId(noteId)
+    if not tab then
+        return false
+    end
+
+    if not self:IsNoteTabInEditMode(tab) then
+        self:SetNoteTabMode(tab, "edit")
+    end
+
+    self:SelectTab(tab.key)
+    return true
+end
+
 function module:OpenWindow()
     if not self:IsOperationalEnabled() then
         self:PrintMessage("SnailNotes is disabled.")
@@ -2145,6 +2282,8 @@ function module:Refresh()
         self:SelectTab(self.runtime.activeTabKey or "home")
     end
 
+    self:RefreshFloatWindow()
+
     self:UpdateReadItemInfoEventRegistration()
 end
 
@@ -2176,6 +2315,16 @@ function module:HandleReadItemInfoReceived(itemId, success)
         local pendingReadItemIds = previewView.pendingReadItemIds
         if pendingReadItemIds and pendingReadItemIds[numericItemId] then
             self:RefreshNotePreview(previewOwnerTab)
+            didRefreshTab = true
+        end
+    end
+
+    local floatWindow = self.runtime.floatWindow
+    local floatView = floatWindow and floatWindow.readView or nil
+    if floatWindow and floatWindow:IsShown() and floatView and floatView.hasPendingReadItemInfo then
+        local pendingReadItemIds = floatView.pendingReadItemIds
+        if pendingReadItemIds and pendingReadItemIds[numericItemId] then
+            self:RefreshFloatWindow()
             didRefreshTab = true
         end
     end
@@ -2218,6 +2367,7 @@ function module:OnDisable()
     if previewOwner then
         self:DisableNotePreview(previewOwner)
     end
+    self:HideFloatWindow()
     self:CloseWindow()
 end
 

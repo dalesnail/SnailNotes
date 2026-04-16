@@ -93,6 +93,7 @@ local NOTE_PREVIEW_WINDOW_WIDTH = constants.NOTE_PREVIEW_WINDOW_WIDTH
 local NOTE_PREVIEW_WINDOW_HEIGHT = constants.NOTE_PREVIEW_WINDOW_HEIGHT
 local NOTE_PREVIEW_WINDOW_MIN_WIDTH = constants.NOTE_PREVIEW_WINDOW_MIN_WIDTH
 local NOTE_PREVIEW_WINDOW_MIN_HEIGHT = constants.NOTE_PREVIEW_WINDOW_MIN_HEIGHT
+local NOTE_READ_ACTION_BUTTON_WIDTH = 68
 local HOME_ROW_TITLE_FONT = "Interface\\AddOns\\SnailNotes\\Media\\Fonts\\IBM-Plex-Sans\\IBMPlexSans-Bold.ttf"
 local HOME_ROW_TIMESTAMP_FONT = "Interface\\AddOns\\SnailNotes\\Media\\Fonts\\IBM-Plex-Sans\\IBMPlexSans-Medium.ttf"
 local HOME_ROW_BUILTIN_TITLE_FONT_SIZE = HOME_ROW_TITLE_FONT_SIZE + 4
@@ -114,6 +115,8 @@ local HOME_ROW_TIMESTAMP_UNSELECTED_COLOR = {
     HOME_ROW_UNSELECTED_TIMESTAMP_BRIGHTNESS,
 }
 local HOME_ROW_TIMESTAMP_DISPLAY_WIDTH = 138
+local HOME_ROW_PIN_ICON_SPACING = 4
+local HOME_ROW_PIN_ICON_SIZE_OFFSET = 1
 local HOME_LIST_INNER_SHADOW_ATLAS = "insetshadow"
 local HOME_LIST_INNER_SHADOW_ALPHA = 0.85
 local HOME_LIST_INNER_SHADOW_INSET = 1
@@ -168,6 +171,32 @@ local function FormatHomeListTimestamp(timestamp, createdTimestamp)
     end
 
     return string.format("%s %s", prefix, date("%b %d", safeTimestamp))
+end
+
+local function GetHomeRowPinIconSize(row)
+    local fontSize = select(2, row and row.title and row.title:GetFont())
+    fontSize = tonumber(fontSize) or HOME_ROW_TITLE_FONT_SIZE
+    return math.max(math.floor(fontSize + HOME_ROW_PIN_ICON_SIZE_OFFSET + 0.5), 1)
+end
+
+local function ApplyHomeRowTitleAnchors(row, isBuiltin, isPinned)
+    if not row or not row.title then
+        return
+    end
+
+    row.title:ClearAllPoints()
+    if isBuiltin then
+        row.title:SetPoint("LEFT", row, "LEFT", HOME_ROW_TEXT_SIDE_INSET + HOME_ROW_BUILTIN_TITLE_CENTER_OFFSET_X, HOME_ROW_TITLE_VERTICAL_OFFSET)
+        row.title:SetPoint("RIGHT", row, "RIGHT", -(HOME_ROW_TEXT_SIDE_INSET - HOME_ROW_BUILTIN_TITLE_CENTER_OFFSET_X), HOME_ROW_TITLE_VERTICAL_OFFSET)
+        return
+    end
+
+    if isPinned and row.pinIcon then
+        row.title:SetPoint("LEFT", row.pinIcon, "RIGHT", HOME_ROW_PIN_ICON_SPACING, HOME_ROW_TITLE_VERTICAL_OFFSET)
+    else
+        row.title:SetPoint("LEFT", HOME_ROW_TEXT_SIDE_INSET, HOME_ROW_TITLE_VERTICAL_OFFSET)
+    end
+    row.title:SetPoint("RIGHT", row, "RIGHT", -(HOME_ROW_TIMESTAMP_RIGHT_INSET + HOME_ROW_TIMESTAMP_DISPLAY_WIDTH + HOME_ROW_TITLE_TO_TIMESTAMP_SPACING), HOME_ROW_TITLE_VERTICAL_OFFSET)
 end
 
 local function ApplyTooltipBorderToRegion(parent, targetFrame)
@@ -1025,14 +1054,22 @@ function module:CreateNoteReadView(parent)
     view.deleteButton:SetPoint("RIGHT", view.modeButton, "LEFT", -4, 0)
 
     view.exportButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
-    view.exportButton:SetSize(NOTE_TAB_EXPORT_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
+    view.exportButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
     view.exportButton:SetText("Export")
     view.exportButton:SetPoint("RIGHT", view.deleteButton, "LEFT", -4, 0)
 
     view.linkButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
-    view.linkButton:SetSize(NOTE_TAB_EXPORT_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
+    view.linkButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
     view.linkButton:SetText("Link")
     view.linkButton:SetPoint("RIGHT", view.exportButton, "LEFT", -4, 0)
+
+    view.floatButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
+    view.floatButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
+    view.floatButton:SetText("Float")
+    view.floatButton:SetPoint("RIGHT", view.linkButton, "LEFT", -4, 0)
+
+    view.modeButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
+    view.deleteButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
 
     view.titleText = view.topRow:CreateFontString(nil, "ARTWORK", "GameFontHighlightLarge")
     view.titleText:SetWidth(NOTE_TAB_TITLE_WIDTH)
@@ -1042,7 +1079,7 @@ function module:CreateNoteReadView(parent)
 
     view.metaText = view.topRow:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     view.metaText:SetPoint("LEFT", view.titleText, "RIGHT", NOTE_TAB_TITLE_TO_META_SPACING, 0)
-    view.metaText:SetPoint("RIGHT", view.linkButton, "LEFT", -NOTE_TAB_READ_TITLE_RIGHT_INSET, 0)
+    view.metaText:SetPoint("RIGHT", view.floatButton, "LEFT", -NOTE_TAB_READ_TITLE_RIGHT_INSET, 0)
     view.metaText:SetJustifyH("LEFT")
     view.metaText:SetJustifyV("MIDDLE")
 
@@ -1096,6 +1133,11 @@ function module:CreateNoteReadView(parent)
     view.bodyScrollFrame:SetScript("OnMouseWheel", function(selfFrame, delta)
         ApplyNotesMouseWheelScroll(selfFrame, delta)
     end)
+    view.bodyScrollFrame:SetScript("OnScrollRangeChanged", function()
+        if module.ApplyPendingNoteReadViewScrollRestore then
+            module:ApplyPendingNoteReadViewScrollRestore(view)
+        end
+    end)
 
     return view
 end
@@ -1125,6 +1167,11 @@ function module:CreateHomeListRow(parent, index)
     row.title:SetJustifyV("MIDDLE")
     row.title:SetWordWrap(false)
     row.title:SetFont(HOME_ROW_TITLE_FONT, HOME_ROW_TITLE_FONT_SIZE, "")
+
+    row.pinIcon = row:CreateTexture(nil, "ARTWORK")
+    row.pinIcon:SetAtlas("auctionhouse-icon-favorite")
+    row.pinIcon:SetAlpha(0.9)
+    row.pinIcon:Hide()
 
     row.timestamp = row:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
     row.timestamp:SetWidth(HOME_ROW_TIMESTAMP_DISPLAY_WIDTH)
@@ -1324,20 +1371,27 @@ function module:RefreshHomeList()
         local note = notes[noteIndex]
 
         if note then
+            local isPinned = not note.isBuiltin and self:IsNotePinned(note.id)
             row.noteId = note.id
             row.title:SetText(note.title or DEFAULT_NOTE_TITLE)
             if note.isBuiltin then
                 row.title:SetFont(HOME_ROW_TITLE_FONT, HOME_ROW_BUILTIN_TITLE_FONT_SIZE, "")
                 row.title:SetJustifyH("CENTER")
-                row.title:ClearAllPoints()
-                row.title:SetPoint("LEFT", row, "LEFT", HOME_ROW_TEXT_SIDE_INSET + HOME_ROW_BUILTIN_TITLE_CENTER_OFFSET_X, HOME_ROW_TITLE_VERTICAL_OFFSET)
-                row.title:SetPoint("RIGHT", row, "RIGHT", -(HOME_ROW_TEXT_SIDE_INSET - HOME_ROW_BUILTIN_TITLE_CENTER_OFFSET_X), HOME_ROW_TITLE_VERTICAL_OFFSET)
+                row.pinIcon:Hide()
+                ApplyHomeRowTitleAnchors(row, true, false)
             else
                 row.title:SetFont(HOME_ROW_TITLE_FONT, HOME_ROW_TITLE_FONT_SIZE, "")
                 row.title:SetJustifyH("LEFT")
-                row.title:ClearAllPoints()
-                row.title:SetPoint("LEFT", HOME_ROW_TEXT_SIDE_INSET, HOME_ROW_TITLE_VERTICAL_OFFSET)
-                row.title:SetPoint("RIGHT", row, "RIGHT", -(HOME_ROW_TIMESTAMP_RIGHT_INSET + HOME_ROW_TIMESTAMP_DISPLAY_WIDTH + HOME_ROW_TITLE_TO_TIMESTAMP_SPACING), HOME_ROW_TITLE_VERTICAL_OFFSET)
+                if isPinned then
+                    local pinIconSize = GetHomeRowPinIconSize(row)
+                    row.pinIcon:SetSize(pinIconSize, pinIconSize)
+                    row.pinIcon:ClearAllPoints()
+                    row.pinIcon:SetPoint("LEFT", row, "LEFT", HOME_ROW_TEXT_SIDE_INSET, 0)
+                    row.pinIcon:Show()
+                else
+                    row.pinIcon:Hide()
+                end
+                ApplyHomeRowTitleAnchors(row, false, isPinned)
             end
             if note.isBuiltin then
                 row.timestamp:SetText("")
@@ -1354,11 +1408,10 @@ function module:RefreshHomeList()
             end
         else
             row.noteId = nil
+            row.pinIcon:Hide()
             row.title:SetFont(HOME_ROW_TITLE_FONT, HOME_ROW_TITLE_FONT_SIZE, "")
             row.title:SetJustifyH("LEFT")
-            row.title:ClearAllPoints()
-            row.title:SetPoint("LEFT", HOME_ROW_TEXT_SIDE_INSET, HOME_ROW_TITLE_VERTICAL_OFFSET)
-                row.title:SetPoint("RIGHT", row, "RIGHT", -(HOME_ROW_TIMESTAMP_RIGHT_INSET + HOME_ROW_TIMESTAMP_DISPLAY_WIDTH + HOME_ROW_TITLE_TO_TIMESTAMP_SPACING), HOME_ROW_TITLE_VERTICAL_OFFSET)
+            ApplyHomeRowTitleAnchors(row, false, false)
             row:Hide()
         end
     end
@@ -1755,6 +1808,12 @@ function module:CreateTab(frame, definition, index)
             end)
         end
         if readView then
+            readView.floatButton:SetScript("OnClick", function()
+                local noteId = tab and tab.noteData and tab.noteData.noteId or nil
+                if noteId then
+                    module:ShowFloatWindow(noteId)
+                end
+            end)
             readView.linkButton:SetScript("OnClick", function()
                 local noteId = tab and tab.noteData and tab.noteData.noteId or nil
                 if noteId then
@@ -1885,13 +1944,19 @@ function module:CreateRowActionMenu(parent)
         module:DuplicateNote(noteId)
     end)
 
-    menu.buttons[5] = self:CreateRowActionMenuButton(menu, "Delete", 5, function()
+    menu.buttons[5] = self:CreateRowActionMenuButton(menu, "Pin to top", 5, function()
+        local noteId = menu.noteId
+        local isPinned = module:IsNotePinned(noteId)
+        menu:Hide()
+        module:SetNotePinned(noteId, not isPinned)
+    end)
+
+    menu.buttons[6] = self:CreateRowActionMenuButton(menu, "Delete", 6, function()
         local noteId = menu.noteId
         menu:Hide()
         module:DeleteNote(noteId)
     end)
 
-    menu:SetHeight((ROW_MENU_PADDING * 2) + (ROW_MENU_BUTTON_HEIGHT * #menu.buttons) + (ROW_MENU_SPACING * (#menu.buttons - 1)))
     menu:SetScript("OnHide", function()
         menu.noteId = nil
         menu.currentRow = nil
@@ -1918,6 +1983,42 @@ function module:RefreshRowActionMenu()
             newTabButton.text:SetTextColor(0.93, 0.90, 0.84)
         end
     end
+
+    local pinButton = menu.buttons and menu.buttons[5]
+    if pinButton then
+        local showPinButton = menu.noteId and not self:IsBuiltinNoteId(menu.noteId)
+        pinButton:SetShown(showPinButton)
+        if showPinButton then
+            pinButton.disabled = false
+            pinButton:EnableMouse(true)
+            pinButton.highlight:Hide()
+            pinButton.text:SetTextColor(0.93, 0.90, 0.84)
+            if self:IsNotePinned(menu.noteId) then
+                pinButton.text:SetText("Unpin")
+            else
+                pinButton.text:SetText("Pin to top")
+            end
+        end
+    end
+
+    local previousButton = nil
+    local visibleButtonCount = 0
+    for _, button in ipairs(menu.buttons or {}) do
+        if button:IsShown() then
+            button:ClearAllPoints()
+            button:SetPoint("LEFT", ROW_MENU_PADDING, 0)
+            button:SetPoint("RIGHT", -ROW_MENU_PADDING, 0)
+            if previousButton then
+                button:SetPoint("TOP", previousButton, "BOTTOM", 0, -ROW_MENU_SPACING)
+            else
+                button:SetPoint("TOP", 0, -ROW_MENU_PADDING)
+            end
+            previousButton = button
+            visibleButtonCount = visibleButtonCount + 1
+        end
+    end
+
+    menu:SetHeight((ROW_MENU_PADDING * 2) + (ROW_MENU_BUTTON_HEIGHT * visibleButtonCount) + (ROW_MENU_SPACING * math.max(visibleButtonCount - 1, 0)))
 end
 
 function module:ShowRowActionMenu(row, noteId)
@@ -2294,4 +2395,5 @@ function module:CreateNotePreviewWindow()
     self.runtime.previewWindow = frame
     return frame
 end
+
 
