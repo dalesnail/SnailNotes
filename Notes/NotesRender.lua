@@ -39,10 +39,9 @@ local FONT_BOLDITALIC = constants.FONT_BOLDITALIC
 local DEFAULT_NOTE_BODY = constants.DEFAULT_NOTE_BODY
 local READ_SAME_NOTE_LINK_COLOR = { 0.45, 0.82, 1.0 }
 local READ_TASK_CHECKED_TEXT_COLOR = { 0.72, 0.72, 0.72 }
-local READ_TASK_CHECKED_MARKER_COLOR = { 0.55, 0.92, 0.55 }
-local READ_TASK_UNCHECKED_MARKER_COLOR = { 0.93, 0.90, 0.84 }
+local READ_LIST_MARKER_COLOR = { 0.60, 0.60, 0.60 }
 local READ_TASK_UNCHECKED_GLYPH = "[  ]"
-local READ_TASK_CHECKED_GLYPH = "[✓]"
+local READ_TASK_CHECKED_GLYPH = "[|cff7fe37f✓|r]"
 local READ_INLINE_CODE_TEXT_COLOR = { 0.80, 0.80, 0.80 }
 local READ_INLINE_CODE_BACKGROUND_COLOR = { 0.02, 0.02, 0.02, 0.34 }
 local READ_CODE_TEXT_COLOR = { 0.80, 0.80, 0.80 }
@@ -411,8 +410,30 @@ local function BuildReadViewRenderPlan(bodyText)
     local isCenteredBlock = false
     local isCodeBlock = false
     local codeBlockLines = {}
+    local paragraphLines = nil
+    local paragraphSourceLineIndex = nil
+
+    local function FlushParagraph()
+        if not paragraphLines or #paragraphLines == 0 then
+            paragraphLines = nil
+            paragraphSourceLineIndex = nil
+            return
+        end
+
+        entries[#entries + 1] = {
+            lineType = "plain",
+            displayText = table.concat(paragraphLines, "\n"),
+            sourceLineIndex = paragraphSourceLineIndex,
+            indentOffset = 0,
+            isCentered = false,
+        }
+
+        paragraphLines = nil
+        paragraphSourceLineIndex = nil
+    end
 
     local function FlushCodeBlock()
+        FlushParagraph()
         if not isCodeBlock then
             return
         end
@@ -431,6 +452,7 @@ local function BuildReadViewRenderPlan(bodyText)
     end
 
     local function FlushMalformedCodeBlock()
+        FlushParagraph()
         if not isCodeBlock then
             return
         end
@@ -463,11 +485,14 @@ local function BuildReadViewRenderPlan(bodyText)
                 codeBlockLines[#codeBlockLines + 1] = lineText
             end
         elseif IsReadViewCodeFence(lineText) then
+            FlushParagraph()
             isCodeBlock = true
             wipe(codeBlockLines)
         elseif IsReadViewCenteredBlockStart(lineText) then
+            FlushParagraph()
             isCenteredBlock = true
         elseif IsReadViewCenteredBlockEnd(lineText) then
+            FlushParagraph()
             isCenteredBlock = false
         else
             local lineType, displayText, markerText = ClassifyReadViewLine(lineText)
@@ -477,15 +502,24 @@ local function BuildReadViewRenderPlan(bodyText)
             end
 
             local isCentered = isCenteredBlock
-            entries[#entries + 1] = {
-                lineType = lineType,
-                displayText = displayText,
-                markerText = markerText,
-                sourceLineIndex = lineIndex,
-                indentOffset = (IsReadListLineType(lineType) and not isCentered) and READ_BULLET_INDENT or 0,
-                isCentered = isCentered,
-                anchorId = anchorId,
-            }
+            if lineType == "plain" and not isCentered then
+                paragraphLines = paragraphLines or {}
+                if #paragraphLines == 0 then
+                    paragraphSourceLineIndex = lineIndex
+                end
+                paragraphLines[#paragraphLines + 1] = displayText
+            else
+                FlushParagraph()
+                entries[#entries + 1] = {
+                    lineType = lineType,
+                    displayText = displayText,
+                    markerText = markerText,
+                    sourceLineIndex = lineIndex,
+                    indentOffset = (IsReadListLineType(lineType) and not isCentered) and READ_BULLET_INDENT or 0,
+                    isCentered = isCentered,
+                    anchorId = anchorId,
+                }
+            end
 
             if anchorId and not anchorIds[anchorId] then
                 anchorIds[anchorId] = true
@@ -495,6 +529,8 @@ local function BuildReadViewRenderPlan(bodyText)
 
     if isCodeBlock then
         FlushMalformedCodeBlock()
+    else
+        FlushParagraph()
     end
 
     return entries, anchorIds
@@ -861,6 +897,10 @@ function module:GetReadViewInlineSegmentFontPath(lineType, segmentStyle, fallbac
         return FONT_REGULAR or fallbackFontPath
     end
 
+    if lineType == "taskChecked" then
+        return FONT_ITALIC or FONT_REGULAR or fallbackFontPath
+    end
+
     return FONT_REGULAR or fallbackFontPath
 end
 
@@ -1140,6 +1180,16 @@ local function HasStyledReadSegments(segments)
     return false
 end
 
+local function HasInteractiveReadSegments(segments)
+    for _, segmentData in ipairs(segments or {}) do
+        if segmentData.kind == "itemToken" or segmentData.kind == "anchorLink" or segmentData.kind == "noteLink" then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function SplitReadSegmentIntoUnits(segmentData)
     local units = {}
     local displayText = tostring(segmentData and (segmentData.displayText or segmentData.text) or "")
@@ -1166,24 +1216,51 @@ local function SplitReadSegmentIntoUnits(segmentData)
     local cursor = 1
     local textLength = string.len(displayText)
     while cursor <= textLength do
-        local spaceStart, spaceEnd = string.find(displayText, "^%s+", cursor)
-        if spaceStart then
+        local currentCharacter = string.sub(displayText, cursor, cursor)
+        if currentCharacter == "\n" then
             units[#units + 1] = {
-                text = string.sub(displayText, spaceStart, spaceEnd),
+                text = "\n",
                 segmentData = segmentData,
+                isLineBreak = true,
             }
-            cursor = spaceEnd + 1
+            cursor = cursor + 1
         else
-            local wordStart, wordEnd = string.find(displayText, "^[^%s]+", cursor)
-            if not wordStart then
+            local spaceStart, spaceEnd = string.find(displayText, "^[^\n%S]*", cursor)
+            if spaceStart and spaceEnd and spaceEnd >= spaceStart then
+                local whitespaceText = string.sub(displayText, spaceStart, spaceEnd)
+                if whitespaceText ~= "" then
+                    units[#units + 1] = {
+                        text = whitespaceText,
+                        segmentData = segmentData,
+                    }
+                    cursor = spaceEnd + 1
+                end
+            end
+
+            if cursor > textLength then
                 break
             end
 
-            units[#units + 1] = {
-                text = string.sub(displayText, wordStart, wordEnd),
-                segmentData = segmentData,
-            }
-            cursor = wordEnd + 1
+            currentCharacter = string.sub(displayText, cursor, cursor)
+            if currentCharacter == "\n" then
+                units[#units + 1] = {
+                    text = "\n",
+                    segmentData = segmentData,
+                    isLineBreak = true,
+                }
+                cursor = cursor + 1
+            else
+                local wordStart, wordEnd = string.find(displayText, "^[^\n%s]+", cursor)
+                if not wordStart then
+                    break
+                end
+
+                units[#units + 1] = {
+                    text = string.sub(displayText, wordStart, wordEnd),
+                    segmentData = segmentData,
+                }
+                cursor = wordEnd + 1
+            end
         end
     end
 
@@ -1199,11 +1276,24 @@ function module:MeasureReadLayoutUnit(row, unitText, fontPath, fallbackFontPath,
 end
 
 function module:ResolveReadListMarkerText(markerWidget, lineType, markerText)
-    if lineType ~= "taskUnchecked" and lineType ~= "taskChecked" then
-        return markerText
+    local includeTrailingSpace = markerWidget == nil
+
+    if lineType == "bullet" then
+        return (markerText or "-") .. (includeTrailingSpace and " " or "")
     end
 
-    return markerText or GetReadTaskMarkerGlyph(lineType)
+    if lineType == "numbered" then
+        return (markerText or "1.") .. (includeTrailingSpace and " " or "")
+    end
+
+    if lineType ~= "taskUnchecked" and lineType ~= "taskChecked" then
+        if not markerText then
+            return markerText
+        end
+        return markerText .. (includeTrailingSpace and " " or "")
+    end
+
+    return (markerText or GetReadTaskMarkerGlyph(lineType)) .. (includeTrailingSpace and " " or "")
 end
 
 function module:BuildResolvedReadViewSegments(displayText, lineType, readView, pendingItemIds, anchorIds, markerText, isCenteredList)
@@ -1212,11 +1302,10 @@ function module:BuildResolvedReadViewSegments(displayText, lineType, readView, p
         markerText = self:ResolveReadListMarkerText(nil, lineType, markerText)
         table.insert(segments, 1, {
             kind = "text",
-            style = "plain",
-            text = markerText .. " ",
-            displayText = markerText .. " ",
-            textColor = lineType == "taskChecked" and READ_TASK_CHECKED_MARKER_COLOR
-                or (lineType == "taskUnchecked" and READ_TASK_UNCHECKED_MARKER_COLOR or nil),
+            style = "bold",
+            text = markerText,
+            displayText = markerText,
+            textColor = READ_LIST_MARKER_COLOR,
         })
     end
 
@@ -1352,28 +1441,32 @@ function module:RenderStyledReadSegments(row, lineType, segments, markerText, fa
     for _, unitData in ipairs(layoutUnits) do
         local segmentData = unitData.segmentData or {}
         local unitText = unitData.text or ""
-        local unitIsWhitespace = string.match(unitText, "^%s+$") ~= nil
-        local unitFontPath = self:GetReadViewInlineSegmentFontPath(lineType, segmentData.style or "plain", fallbackFontPath)
-        local unitWidth, unitHeight = self:MeasureReadLayoutUnit(row, unitText, unitFontPath, fallbackFontPath, fontSize, fontFlags)
-
-        if not unitIsWhitespace and #currentLine.chunks > 0 and (currentLine.width + unitWidth) > availableWidth then
+        if unitData.isLineBreak then
             StartNewLine()
-        end
+        else
+            local unitIsWhitespace = string.match(unitText, "^%s+$") ~= nil
+            local unitFontPath = self:GetReadViewInlineSegmentFontPath(lineType, segmentData.style or "plain", fallbackFontPath)
+            local unitWidth, unitHeight = self:MeasureReadLayoutUnit(row, unitText, unitFontPath, fallbackFontPath, fontSize, fontFlags)
 
-        if unitIsWhitespace and #currentLine.chunks == 0 then
-            unitWidth = 0
-        end
+            if not unitIsWhitespace and #currentLine.chunks > 0 and (currentLine.width + unitWidth) > availableWidth then
+                StartNewLine()
+            end
 
-        currentLine.chunks[#currentLine.chunks + 1] = {
-            text = unitText,
-            width = unitWidth,
-            height = unitHeight,
-            fontPath = unitFontPath,
-            segmentData = segmentData,
-            x = currentLine.width,
-        }
-        currentLine.width = currentLine.width + unitWidth
-        currentLine.height = math.max(currentLine.height, unitHeight)
+            if unitIsWhitespace and #currentLine.chunks == 0 then
+                unitWidth = 0
+            end
+
+            currentLine.chunks[#currentLine.chunks + 1] = {
+                text = unitText,
+                width = unitWidth,
+                height = unitHeight,
+                fontPath = unitFontPath,
+                segmentData = segmentData,
+                x = currentLine.width,
+            }
+            currentLine.width = currentLine.width + unitWidth
+            currentLine.height = math.max(currentLine.height, unitHeight)
+        end
     end
 
     local textIndex = 0
@@ -1494,15 +1587,11 @@ function module:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemId
 
     if IsReadListLineType(lineType) then
         if not isCenteredList then
-            self:ApplyReadViewFont(row.bullet, fallbackFontPath, fallbackFontPath, self:GetReadViewFontSizeForLine("plain", readView), fontFlags)
+            self:ApplyReadViewFont(row.bullet, FONT_BOLD, fallbackFontPath, self:GetReadViewFontSizeForLine("plain", readView), fontFlags)
             markerText = self:ResolveReadListMarkerText(row.bullet, lineType, markerText or "•")
             row.markerText = markerText
             row.bullet:SetText(markerText or "•")
-            if lineType == "taskChecked" then
-                row.bullet:SetTextColor(unpack(READ_TASK_CHECKED_MARKER_COLOR))
-            elseif lineType == "taskUnchecked" then
-                row.bullet:SetTextColor(unpack(READ_TASK_UNCHECKED_MARKER_COLOR))
-            end
+            row.bullet:SetTextColor(unpack(READ_LIST_MARKER_COLOR))
             row.bullet:Show()
         end
     end
@@ -1517,10 +1606,11 @@ function module:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemId
         row.text:SetPoint("TOPRIGHT", row, "TOPRIGHT", -bodyInnerX, -bodyInnerY)
         row.text:SetJustifyH(row.isCentered and "CENTER" or "LEFT")
     end
-    self:ApplyReadViewFont(row.text, resolvedFontPath, fallbackFontPath, fontSize, fontFlags)
     if lineType == "taskChecked" then
+        self:ApplyReadViewFont(row.text, FONT_ITALIC or resolvedFontPath, fallbackFontPath, fontSize, fontFlags)
         row.text:SetTextColor(unpack(READ_TASK_CHECKED_TEXT_COLOR))
     else
+        self:ApplyReadViewFont(row.text, resolvedFontPath, fallbackFontPath, fontSize, fontFlags)
         row.text:SetTextColor(1, 1, 1)
     end
     row.text:SetShadowOffset(0, 0)
@@ -1597,7 +1687,10 @@ function module:ApplyReadViewLineStyle(row, lineType, displayText, pendingItemId
 
     row.inlineSegments = segments
     row.renderedLineType = lineType
-    if HasStyledReadSegments(segments) or (isCenteredList and (lineType == "taskUnchecked" or lineType == "taskChecked")) then
+    if HasStyledReadSegments(segments)
+        or HasInteractiveReadSegments(segments)
+        or (isCenteredList and (lineType == "taskUnchecked" or lineType == "taskChecked"))
+    then
         row.usesStyledSegments = true
         self:RenderStyledReadSegments(row, lineType, segments, markerText, fallbackFontPath, fontSize, fontFlags)
     else

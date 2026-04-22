@@ -940,6 +940,276 @@ local function SplitNoteBodyTextIntoLines(bodyText)
     return lines
 end
 
+local function NormalizeNoteBodyText(bodyText)
+    local text = tostring(bodyText or "")
+    text = string.gsub(text, "\r\n", "\n")
+    text = string.gsub(text, "\r", "\n")
+    return text
+end
+
+local function GetNoteBodyLineBounds(bodyText, cursorPosition)
+    local text = NormalizeNoteBodyText(bodyText)
+    local safeCursor = math.max(math.min(tonumber(cursorPosition) or 0, string.len(text)), 0)
+    local lineStart = 1
+    local searchStart = 1
+
+    while true do
+        local newlineIndex = string.find(text, "\n", searchStart, true)
+        if not newlineIndex or newlineIndex >= (safeCursor + 1) then
+            break
+        end
+
+        lineStart = newlineIndex + 1
+        searchStart = newlineIndex + 1
+    end
+
+    local lineEnd = string.find(text, "\n", lineStart, true)
+    if lineEnd then
+        lineEnd = lineEnd - 1
+    else
+        lineEnd = string.len(text)
+    end
+
+    return text, safeCursor, lineStart, lineEnd
+end
+
+local function ReplaceNoteBodyRange(text, startIndex, endIndex, replacement)
+    local prefix = startIndex > 1 and string.sub(text, 1, startIndex - 1) or ""
+    local suffix = endIndex < string.len(text) and string.sub(text, endIndex + 1) or ""
+    return prefix .. (replacement or "") .. suffix
+end
+
+local function ApplyNoteBodyEditBoxText(tab, editBox, updatedText, cursorPosition, selectionStart, selectionEnd)
+    if not tab or not tab.panel or not editBox then
+        return false
+    end
+
+    local panel = tab.panel
+    local editView = module:GetNoteTabEditView(panel)
+    local bodyScrollFrame = editView and editView.bodyScrollFrame or nil
+    local previousScrollOffset = bodyScrollFrame and bodyScrollFrame:GetVerticalScroll() or nil
+    local clampedCursorPosition = math.max(math.min(tonumber(cursorPosition) or 0, string.len(updatedText or "")), 0)
+
+    panel.isLoadingView = true
+    editBox:SetText(updatedText or "")
+    if selectionStart ~= nil and selectionEnd ~= nil and selectionStart ~= selectionEnd and editBox.HighlightText then
+        editBox:HighlightText(
+            math.max(math.min(tonumber(selectionStart) or 0, string.len(updatedText or "")), 0),
+            math.max(math.min(tonumber(selectionEnd) or 0, string.len(updatedText or "")), 0)
+        )
+    elseif editBox.SetCursorPosition then
+        editBox:SetCursorPosition(clampedCursorPosition)
+    end
+    if previousScrollOffset ~= nil and bodyScrollFrame and bodyScrollFrame.GetVerticalScrollRange then
+        local maxScroll = math.max(bodyScrollFrame:GetVerticalScrollRange() or 0, 0)
+        bodyScrollFrame:SetVerticalScroll(math.max(0, math.min(previousScrollOffset, maxScroll)))
+    end
+    panel.isLoadingView = false
+
+    tab.noteData = tab.noteData or {}
+    tab.noteData.body = updatedText or ""
+    module:HandleNoteTabContentChanged(tab)
+    return true
+end
+
+local function GetNoteBodyLineRangeForSpan(bodyText, startPosition, endPosition)
+    local text = NormalizeNoteBodyText(bodyText)
+    local textLength = string.len(text)
+    local safeStart = math.max(math.min(tonumber(startPosition) or 0, textLength), 0)
+    local safeEnd = math.max(math.min(tonumber(endPosition) or safeStart, textLength), safeStart)
+    local _, _, lineStart = GetNoteBodyLineBounds(text, safeStart)
+    local _, _, _, lineEnd = GetNoteBodyLineBounds(text, math.max(safeEnd - 1, safeStart))
+    return text, safeStart, safeEnd, lineStart, lineEnd
+end
+
+local function GetNoteBodySelectionBounds(editBox)
+    if not editBox or not editBox.GetTextHighlight then
+        return nil, nil
+    end
+
+    local selectionStart, selectionEnd = editBox:GetTextHighlight()
+    selectionStart = tonumber(selectionStart)
+    selectionEnd = tonumber(selectionEnd)
+    if not selectionStart or not selectionEnd or selectionStart == selectionEnd then
+        return nil, nil
+    end
+
+    if selectionStart > selectionEnd then
+        selectionStart, selectionEnd = selectionEnd, selectionStart
+    end
+
+    return selectionStart, selectionEnd
+end
+
+local function StripSimpleNoteListPrefix(lineText)
+    local line = tostring(lineText or "")
+    local indentation, remainder = string.match(line, "^([ \t]*)%- %[[xX]?%]%s*(.*)$")
+    if indentation then
+        return indentation, remainder
+    end
+
+    indentation, remainder = string.match(line, "^([ \t]*)%d+%.%s*(.*)$")
+    if indentation then
+        return indentation, remainder
+    end
+
+    indentation, remainder = string.match(line, "^([ \t]*)%-%s*(.*)$")
+    if indentation then
+        return indentation, remainder
+    end
+
+    indentation = string.match(line, "^([ \t]*)")
+    remainder = string.sub(line, string.len(indentation or "") + 1)
+    return indentation or "", remainder or ""
+end
+
+local function ApplyNoteLineFormat(lineText, formatType, sequenceNumber)
+    local originalLine = tostring(lineText or "")
+    if string.match(originalLine, "^%s*$") then
+        return originalLine, false
+    end
+
+    local indentation, content = StripSimpleNoteListPrefix(originalLine)
+    if string.match(content or "", "^%s*$") then
+        return indentation or "", false
+    end
+
+    if formatType == "task" then
+        return (indentation or "") .. "- [] " .. content, true
+    end
+
+    if formatType == "bullet" then
+        return (indentation or "") .. "- " .. content, true
+    end
+
+    if formatType == "numbered" then
+        return string.format("%s%d. %s", indentation or "", tonumber(sequenceNumber) or 1, content), true
+    end
+
+    return originalLine, false
+end
+
+function module:ApplyLineFormatToSelection(tab, editBox, formatType, options)
+    if not tab or (formatType ~= "task" and formatType ~= "bullet" and formatType ~= "numbered") then
+        return false
+    end
+
+    options = options or {}
+    local view = self:GetNoteTabEditView(tab.panel)
+    editBox = editBox or (view and view.bodyInput or nil)
+    if not editBox then
+        return false
+    end
+
+    local currentText = NormalizeNoteBodyText(editBox:GetText())
+    local cursorPosition = editBox.GetCursorPosition and editBox:GetCursorPosition() or 0
+    local selectionStart, selectionEnd = GetNoteBodySelectionBounds(editBox)
+    if selectionStart == nil or selectionEnd == nil then
+        selectionStart = tonumber(options.selectionStart)
+        selectionEnd = tonumber(options.selectionEnd)
+    end
+    if selectionStart ~= nil and selectionEnd ~= nil and selectionStart > selectionEnd then
+        selectionStart, selectionEnd = selectionEnd, selectionStart
+    end
+    if selectionStart == selectionEnd then
+        selectionStart, selectionEnd = nil, nil
+    end
+    cursorPosition = tonumber(options.cursorPosition) or cursorPosition
+    local targetStart = selectionStart or cursorPosition
+    local targetEnd = selectionEnd or cursorPosition
+    local text, _, _, lineStart, lineEnd = GetNoteBodyLineRangeForSpan(currentText, targetStart, targetEnd)
+    local selectedBlock = string.sub(text, lineStart, lineEnd)
+    local lines = SplitNoteBodyTextIntoLines(selectedBlock)
+    local updatedLines = {}
+    local numberedIndex = 1
+
+    for lineIndex, lineText in ipairs(lines) do
+        local updatedLine, didFormat = ApplyNoteLineFormat(lineText, formatType, numberedIndex)
+        updatedLines[lineIndex] = updatedLine
+        if didFormat and formatType == "numbered" then
+            numberedIndex = numberedIndex + 1
+        end
+    end
+
+    local replacementText = table.concat(updatedLines, "\n")
+    local updatedText = ReplaceNoteBodyRange(text, lineStart, lineEnd, replacementText)
+    local updatedCursorPosition = math.max(math.min((lineStart - 1) + string.len(replacementText), string.len(updatedText)), 0)
+
+    if selectionStart ~= nil and selectionEnd ~= nil then
+        local updatedSelectionStart = lineStart - 1
+        local updatedSelectionEnd = updatedSelectionStart + string.len(replacementText)
+        return ApplyNoteBodyEditBoxText(tab, editBox, updatedText, updatedCursorPosition, updatedSelectionStart, updatedSelectionEnd)
+    end
+
+    return ApplyNoteBodyEditBoxText(tab, editBox, updatedText, updatedCursorPosition)
+end
+
+function module:TryHandleNoteSmartEnter(tab, editBox)
+    if not tab then
+        return false
+    end
+
+    local view = self:GetNoteTabEditView(tab.panel)
+    editBox = editBox or (view and view.bodyInput or nil)
+    if not editBox then
+        return false
+    end
+
+    local currentText, cursorPosition, lineStart, lineEnd = GetNoteBodyLineBounds(
+        editBox:GetText(),
+        editBox.GetCursorPosition and editBox:GetCursorPosition() or 0
+    )
+    local currentLine = string.sub(currentText, lineStart, lineEnd)
+    local indentation, remainder = string.match(currentLine, "^([ \t]*)%- %[([xX]?)%](.*)$")
+    local insertText
+
+    if indentation then
+        insertText = "\n" .. indentation .. "- [] "
+    else
+        local bulletIndentation, bulletRemainder = string.match(currentLine, "^([ \t]*)%-$")
+        if bulletIndentation then
+            indentation = bulletIndentation
+            remainder = ""
+            insertText = "\n" .. indentation .. "- "
+        else
+            bulletIndentation, bulletRemainder = string.match(currentLine, "^([ \t]*)%-(%s.*)$")
+            if bulletIndentation then
+                indentation = bulletIndentation
+                remainder = bulletRemainder
+                insertText = "\n" .. indentation .. "- "
+            else
+                local numberedIndentation, currentNumber, numberedRemainder = string.match(currentLine, "^([ \t]*)(%d+)%.(.*)$")
+                if not numberedIndentation then
+                    return false
+                end
+                if numberedRemainder ~= "" and not string.match(numberedRemainder, "^%s") then
+                    return false
+                end
+
+                indentation = numberedIndentation
+                remainder = numberedRemainder
+                insertText = "\n" .. indentation .. tostring((tonumber(currentNumber) or 0) + 1) .. ". "
+            end
+        end
+    end
+
+    if not indentation then
+        return false
+    end
+
+    local isEmptyListLine = string.match(remainder or "", "^%s*$") ~= nil
+    if isEmptyListLine then
+        local updatedText = ReplaceNoteBodyRange(currentText, lineStart, lineEnd, "")
+        local updatedCursorPosition = math.max(lineStart - 1, 0)
+        return ApplyNoteBodyEditBoxText(tab, editBox, updatedText, updatedCursorPosition)
+    end
+
+    local insertAt = cursorPosition
+    local updatedText = string.sub(currentText, 1, insertAt) .. insertText .. string.sub(currentText, insertAt + 1)
+    local updatedCursorPosition = insertAt + string.len(insertText)
+    return ApplyNoteBodyEditBoxText(tab, editBox, updatedText, updatedCursorPosition)
+end
+
 function module:ToggleTaskLineAtIndex(tab, sourceLineIndex)
     if not tab or not sourceLineIndex then
         return false
@@ -1074,8 +1344,8 @@ function module:RefreshNoteTabControls(tab)
     end
 
     local hasSavedNote = tab and tab.noteData and tab.noteData.noteId and true or false
-    if editView and editView.deleteButton then
-        editView.deleteButton:SetEnabled(hasSavedNote and not isBuiltinNote)
+    if editView and editView.formatButton then
+        editView.formatButton:SetEnabled(not isBuiltinNote)
     end
     if readView and readView.deleteButton then
         readView.deleteButton:SetEnabled(hasSavedNote and not isBuiltinNote)

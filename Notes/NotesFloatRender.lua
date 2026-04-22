@@ -50,8 +50,7 @@ local FLOAT_SEPARATOR_HEIGHT = 12
 local FLOAT_TEXTURE_MAX_HEIGHT = 180
 local FLOAT_LINK_COLOR = { 0.45, 0.82, 1.0 }
 local FLOAT_TASK_CHECKED_TEXT_COLOR = { 0.72, 0.72, 0.72 }
-local FLOAT_TASK_CHECKED_MARKER_COLOR = { 0.55, 0.92, 0.55 }
-local FLOAT_TASK_UNCHECKED_MARKER_COLOR = { 0.93, 0.90, 0.84 }
+local FLOAT_LIST_MARKER_COLOR = { 0.60, 0.60, 0.60 }
 local FLOAT_INLINE_CODE_TEXT_COLOR = { 0.80, 0.80, 0.80 }
 local FLOAT_INLINE_CODE_BACKGROUND_COLOR = { 0.02, 0.02, 0.02, 0.42 }
 local FLOAT_CODE_TEXT_COLOR = { 0.80, 0.80, 0.80 }
@@ -73,20 +72,127 @@ local function IsFloatHeaderLineType(lineType)
 end
 
 local function GetFloatChunkFontPath(style, lineType)
-    if style == "bolditalic" then
-        return FONT_BOLDITALIC
-    elseif style == "bold" then
-        return FONT_BOLD
-    elseif style == "italic" then
-        if IsFloatHeaderLineType(lineType) then
-            return FONT_BOLDITALIC or FONT_BOLD or FONT_ITALIC or FONT_REGULAR
+    if IsFloatHeaderLineType(lineType) then
+        if style == "italic" or style == "bolditalic" then
+            return FONT_BOLDITALIC or FONT_BOLD or FONT_REGULAR
         end
-        return FONT_ITALIC
-    elseif IsFloatHeaderLineType(lineType) then
+
         return FONT_BOLD or FONT_REGULAR
     end
 
-    return FONT_REGULAR
+    if style == "bolditalic" then
+        return FONT_BOLDITALIC or FONT_BOLD or FONT_REGULAR
+    elseif style == "bold" then
+        return FONT_BOLD or FONT_REGULAR
+    elseif style == "italic" then
+        return FONT_ITALIC or FONT_REGULAR
+    elseif style == "code" then
+        return FONT_REGULAR
+    elseif lineType == "taskChecked" then
+        return FONT_ITALIC or FONT_REGULAR
+    else
+        return FONT_REGULAR
+    end
+end
+
+local function GetFloatMarkerFontPath(lineType)
+    if lineType == "h1" or lineType == "h2" or lineType == "h3" then
+        return FONT_BOLD or FONT_REGULAR
+    end
+
+    return FONT_BOLD or FONT_REGULAR
+end
+
+local function GetFloatMarkerTextColor()
+    return FLOAT_LIST_MARKER_COLOR
+end
+
+local function GetFloatSegmentColor(lineType, segmentData)
+    if segmentData.kind == "noteLink" or segmentData.kind == "anchorLink" then
+        return segmentData.isResolved and FLOAT_LINK_COLOR or READ_UNRESOLVED_ITEM_TOKEN_COLOR
+    end
+    if segmentData.kind == "itemToken" then
+        return segmentData.isResolved and nil or READ_UNRESOLVED_ITEM_TOKEN_COLOR
+    end
+    if segmentData.style == "code" then
+        return FLOAT_INLINE_CODE_TEXT_COLOR
+    end
+    if lineType == "taskChecked" then
+        return FLOAT_TASK_CHECKED_TEXT_COLOR
+    end
+    return segmentData.textColor
+end
+
+local function SplitFloatSegmentIntoUnits(segmentData)
+    local units = {}
+    local displayText = tostring(segmentData and (segmentData.displayText or segmentData.text) or "")
+    if displayText == "" then
+        return units
+    end
+
+    if segmentData and (segmentData.kind == "itemToken" or segmentData.style == "code") then
+        units[1] = {
+            text = displayText,
+            segmentData = segmentData,
+            isSpace = false,
+        }
+        return units
+    end
+
+    local cursor = 1
+    local textLength = string.len(displayText)
+    while cursor <= textLength do
+        local currentCharacter = string.sub(displayText, cursor, cursor)
+        if currentCharacter == "\n" then
+            units[#units + 1] = {
+                text = "\n",
+                segmentData = segmentData,
+                isLineBreak = true,
+            }
+            cursor = cursor + 1
+        else
+            local spaceStart, spaceEnd = string.find(displayText, "^[^\n%S]*", cursor)
+            if spaceStart and spaceEnd and spaceEnd >= spaceStart then
+                local whitespaceText = string.sub(displayText, spaceStart, spaceEnd)
+                if whitespaceText ~= "" then
+                    units[#units + 1] = {
+                        text = whitespaceText,
+                        segmentData = segmentData,
+                        isSpace = true,
+                    }
+                    cursor = spaceEnd + 1
+                end
+            end
+
+            if cursor > textLength then
+                break
+            end
+
+            currentCharacter = string.sub(displayText, cursor, cursor)
+            if currentCharacter == "\n" then
+                units[#units + 1] = {
+                    text = "\n",
+                    segmentData = segmentData,
+                    isLineBreak = true,
+                }
+                cursor = cursor + 1
+            else
+                local wordStart, wordEnd = string.find(displayText, "^[^\n%s]+", cursor)
+                if not wordStart then
+                    break
+                end
+
+                units[#units + 1] = {
+                    text = string.sub(displayText, wordStart, wordEnd),
+                    segmentData = segmentData,
+                    isSpace = false,
+                }
+                cursor = wordEnd + 1
+            end
+        end
+    end
+
+    return units
 end
 
 local function GetFloatLineFontSize(lineType)
@@ -376,76 +482,6 @@ local function MeasureFloatText(row, text, fontPath, fontSize)
     return row.measure:GetStringWidth() or 0, row.measure:GetStringHeight() or fontSize
 end
 
-local function SplitFloatSegmentIntoUnits(segmentData)
-    local units = {}
-    local displayText = tostring(segmentData and (segmentData.displayText or segmentData.text) or "")
-    if displayText == "" then
-        return units
-    end
-
-    if segmentData and (segmentData.kind == "itemToken" or segmentData.style == "code") then
-        units[1] = {
-            text = displayText,
-            segmentData = segmentData,
-            isSpace = false,
-        }
-        return units
-    end
-
-    local cursor = 1
-    local textLength = string.len(displayText)
-    while cursor <= textLength do
-        local spaceStart, spaceEnd = string.find(displayText, "^%s+", cursor)
-        if spaceStart then
-            units[#units + 1] = {
-                text = string.sub(displayText, spaceStart, spaceEnd),
-                segmentData = segmentData,
-                isSpace = true,
-            }
-            cursor = spaceEnd + 1
-        else
-            local wordStart, wordEnd = string.find(displayText, "^[^%s]+", cursor)
-            if not wordStart then
-                break
-            end
-
-            units[#units + 1] = {
-                text = string.sub(displayText, wordStart, wordEnd),
-                segmentData = segmentData,
-                isSpace = false,
-            }
-            cursor = wordEnd + 1
-        end
-    end
-
-    return units
-end
-
-local function GetFloatSegmentTextColor(lineType, segmentData, marker)
-    if marker then
-        if lineType == "taskChecked" then
-            return FLOAT_TASK_CHECKED_MARKER_COLOR
-        elseif lineType == "taskUnchecked" then
-            return FLOAT_TASK_UNCHECKED_MARKER_COLOR
-        end
-        return FLOAT_SETTINGS_TEXT_COLOR
-    end
-
-    if segmentData.kind == "noteLink" or segmentData.kind == "anchorLink" then
-        return segmentData.isResolved and FLOAT_LINK_COLOR or READ_UNRESOLVED_ITEM_TOKEN_COLOR
-    end
-    if segmentData.kind == "itemToken" then
-        return segmentData.isResolved and nil or READ_UNRESOLVED_ITEM_TOKEN_COLOR
-    end
-    if segmentData.style == "code" then
-        return FLOAT_INLINE_CODE_TEXT_COLOR
-    end
-    if lineType == "taskChecked" then
-        return FLOAT_TASK_CHECKED_TEXT_COLOR
-    end
-    return segmentData.textColor
-end
-
 local function RenderFloatInlineRow(view, row, entry, segments)
     local lineType = entry.lineType
     local baseFontSize = GetFloatLineFontSize(lineType)
@@ -462,15 +498,10 @@ local function RenderFloatInlineRow(view, row, entry, segments)
     if IsFloatListLineType(lineType) and not entry.isCentered then
         markerText = module:ResolveReadListMarkerText(nil, lineType, entry.markerText or "•")
         row.markerText = markerText
-        module:ApplyReadViewFont(row.markerButton.text, FONT_REGULAR, FONT_REGULAR, GetFloatLineFontSize("plain"), "")
+        module:ApplyReadViewFont(row.markerButton.text, GetFloatMarkerFontPath(lineType), FONT_REGULAR, GetFloatLineFontSize("plain"), "")
         row.markerButton.text:SetText(markerText or "")
-        local markerColor = GetFloatSegmentTextColor(lineType, {}, true)
-        if markerColor then
-            row.markerButton.text:SetTextColor(unpack(markerColor))
-        else
-            row.markerButton.text:SetTextColor(1, 1, 1)
-        end
-        markerWidth, markerHeight = MeasureFloatText(row, markerText or "", FONT_REGULAR, GetFloatLineFontSize("plain"))
+        row.markerButton.text:SetTextColor(unpack(GetFloatMarkerTextColor()))
+        markerWidth, markerHeight = MeasureFloatText(row, markerText or "", GetFloatMarkerFontPath(lineType), GetFloatLineFontSize("plain"))
         row.markerButton:ClearAllPoints()
         row.markerButton:SetPoint("TOPLEFT", row, "TOPLEFT", leftInset, -topInset)
         row.markerButton:SetSize(math.max(markerWidth, 1), math.max(markerHeight, 1))
@@ -491,8 +522,12 @@ local function RenderFloatInlineRow(view, row, entry, segments)
         for _, unit in ipairs(segmentUnits) do
             local fontPath = GetFloatChunkFontPath(segmentData.style, lineType)
             local fontSize = segmentData.style == "code" and GetFloatLineFontSize("code") or baseFontSize
-            local unitWidth, unitHeight = MeasureFloatText(row, unit.text, fontPath, fontSize)
-            if segmentData.style == "code" then
+            local unitWidth = 0
+            local unitHeight = fontSize
+            if not unit.isLineBreak then
+                unitWidth, unitHeight = MeasureFloatText(row, unit.text, fontPath, fontSize)
+            end
+            if segmentData.style == "code" and not unit.isLineBreak then
                 unitWidth = unitWidth + (FLOAT_INLINE_CODE_PADDING_X * 2)
                 unitHeight = unitHeight + (FLOAT_INLINE_CODE_PADDING_Y * 2)
             end
@@ -500,6 +535,7 @@ local function RenderFloatInlineRow(view, row, entry, segments)
                 text = unit.text,
                 segmentData = segmentData,
                 isSpace = unit.isSpace,
+                isLineBreak = unit.isLineBreak,
                 fontPath = fontPath,
                 fontSize = fontSize,
                 width = unitWidth,
@@ -512,7 +548,10 @@ local function RenderFloatInlineRow(view, row, entry, segments)
     local currentLine = { width = 0, height = baseFontSize, units = {} }
     lines[1] = currentLine
     for _, unit in ipairs(units) do
-        if unit.isSpace and currentLine.width == 0 then
+        if unit.isLineBreak then
+            currentLine = { width = 0, height = baseFontSize, units = {} }
+            lines[#lines + 1] = currentLine
+        elseif unit.isSpace and currentLine.width == 0 then
             -- skip leading spaces
         else
             local wouldWrap = currentLine.width > 0 and not unit.isSpace and (currentLine.width + unit.width) > availableWidth
@@ -542,7 +581,7 @@ local function RenderFloatInlineRow(view, row, entry, segments)
             local chunk = GetOrCreateFloatChunk(row, chunkIndex)
             local segmentData = unit.segmentData or {}
             local chunkText = unit.text or ""
-            local textColor = GetFloatSegmentTextColor(lineType, segmentData, false)
+            local textColor = GetFloatSegmentColor(lineType, segmentData)
             chunk.segmentData = (segmentData.kind == "itemToken" or segmentData.kind == "anchorLink" or segmentData.kind == "noteLink")
                 and segmentData.isResolved and not unit.isSpace and segmentData or nil
             chunk:ClearAllPoints()

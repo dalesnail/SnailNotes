@@ -783,6 +783,90 @@ local function FocusNoteEditBodyToEnd(view)
     end
 end
 
+local function CreateNoteFormatMenuButton(parent, label, orderIndex, callback)
+    local button = CreateFrame("Button", nil, parent)
+    button:SetHeight(ROW_MENU_BUTTON_HEIGHT)
+    button:SetPoint("LEFT", ROW_MENU_PADDING, 0)
+    button:SetPoint("RIGHT", -ROW_MENU_PADDING, 0)
+    if orderIndex == 1 then
+        button:SetPoint("TOP", 0, -ROW_MENU_PADDING)
+    else
+        button:SetPoint("TOP", parent.buttons[orderIndex - 1], "BOTTOM", 0, -ROW_MENU_SPACING)
+    end
+
+    button.background = CreateSolidTexture(button, "BACKGROUND", { 0, 0, 0, 0 })
+    button.background:SetAllPoints()
+
+    button.highlight = CreateSolidTexture(button, "ARTWORK", ROW_MENU_BUTTON_HOVER_COLOR)
+    button.highlight:SetAllPoints()
+    button.highlight:Hide()
+
+    button.text = button:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    button.text:SetPoint("LEFT", 8, 0)
+    button.text:SetPoint("RIGHT", -8, 0)
+    button.text:SetJustifyH("LEFT")
+    button.text:SetText(label)
+
+    button:SetScript("OnEnter", function(selfButton)
+        selfButton.highlight:Show()
+    end)
+    button:SetScript("OnLeave", function(selfButton)
+        selfButton.highlight:Hide()
+    end)
+    button:SetScript("OnClick", function()
+        callback()
+    end)
+
+    return button
+end
+
+local function HideNoteFormatMenu(view)
+    if view and view.formatMenu and view.formatMenu:IsShown() then
+        view.formatMenu:Hide()
+    end
+end
+
+local function SnapshotNoteFormatSelection(view)
+    if not view or not view.bodyInput then
+        return
+    end
+
+    view.formatCursorPosition = view.bodyInput.GetCursorPosition and view.bodyInput:GetCursorPosition() or 0
+    if view.bodyInput.GetTextHighlight then
+        local selectionStart, selectionEnd = view.bodyInput:GetTextHighlight()
+        selectionStart = tonumber(selectionStart)
+        selectionEnd = tonumber(selectionEnd)
+        if selectionStart and selectionEnd and selectionStart ~= selectionEnd then
+            if selectionStart > selectionEnd then
+                selectionStart, selectionEnd = selectionEnd, selectionStart
+            end
+            view.formatSelectionStart = selectionStart
+            view.formatSelectionEnd = selectionEnd
+            return
+        end
+    end
+
+    view.formatSelectionStart = nil
+    view.formatSelectionEnd = nil
+end
+
+local function ToggleNoteFormatMenu(view)
+    if not view or not view.formatMenu then
+        return
+    end
+
+    if view.formatMenu:IsShown() then
+        view.formatMenu:Hide()
+        return
+    end
+
+    SnapshotNoteFormatSelection(view)
+
+    view.formatMenu:ClearAllPoints()
+    view.formatMenu:SetPoint("TOPRIGHT", view.formatButton, "BOTTOMRIGHT", 0, -2)
+    view.formatMenu:Show()
+end
+
 function module:CreateNoteEditView(parent)
     local view = CreateFrame("Frame", nil, parent)
     view:SetAllPoints()
@@ -800,9 +884,9 @@ function module:CreateNoteEditView(parent)
     view.modeButton:SetSize(NOTE_TAB_MODE_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
     view.modeButton:SetText("Cancel")
 
-    view.deleteButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
-    view.deleteButton:SetSize(NOTE_TAB_DELETE_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
-    view.deleteButton:SetText("Delete")
+    view.formatButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
+    view.formatButton:SetSize(NOTE_TAB_DELETE_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
+    view.formatButton:SetText("Format")
 
     view.closeButton = CreateFrame("Button", nil, view.topRow, "UIPanelCloseButton")
     view.closeButton:SetSize(NOTE_TAB_TOP_CLOSE_BUTTON_SIZE, NOTE_TAB_TOP_CLOSE_BUTTON_SIZE)
@@ -821,13 +905,54 @@ function module:CreateNoteEditView(parent)
     view.modeButton:ClearAllPoints()
     view.modeButton:SetPoint("RIGHT", view.saveButton, "LEFT", -4, 0)
 
-    view.deleteButton:ClearAllPoints()
-    view.deleteButton:SetPoint("RIGHT", view.modeButton, "LEFT", -4, 0)
+    view.formatButton:ClearAllPoints()
+    view.formatButton:SetPoint("RIGHT", view.modeButton, "LEFT", -4, 0)
 
     view.previewToggle = CreateFrame("Frame", nil, view.topRow)
     view.previewToggle:SetHeight(NOTE_TAB_TOP_ROW_HEIGHT)
-    view.previewToggle:SetPoint("RIGHT", view.deleteButton, "LEFT", -6, 0)
+    view.previewToggle:SetPoint("RIGHT", view.formatButton, "LEFT", -6, 0)
     view.previewToggle:SetWidth(78)
+
+    view.formatMenu = CreateFrame("Frame", nil, view.topRow)
+    view.formatMenu:SetFrameStrata("DIALOG")
+    view.formatMenu:SetFrameLevel((view.topRow:GetFrameLevel() or 1) + 40)
+    view.formatMenu:SetWidth(ROW_MENU_WIDTH - 16)
+    view.formatMenu.background = view.formatMenu:CreateTexture(nil, "BACKGROUND")
+    view.formatMenu.background:SetAllPoints()
+    view.formatMenu.background:SetTexture(ROW_MENU_BACKGROUND_TEXTURE)
+    view.formatMenu.background:SetVertexColor(unpack(ROW_MENU_BACKGROUND_COLOR))
+    view.formatMenu:Hide()
+    view.formatMenu.buttons = {}
+    view.formatMenu.buttons[1] = CreateNoteFormatMenuButton(view.formatMenu, "Bullet", 1, function()
+        HideNoteFormatMenu(view)
+        module:ApplyLineFormatToSelection(view.ownerTab, view.bodyInput, "bullet", {
+            selectionStart = view.formatSelectionStart,
+            selectionEnd = view.formatSelectionEnd,
+            cursorPosition = view.formatCursorPosition,
+        })
+    end)
+    view.formatMenu.buttons[2] = CreateNoteFormatMenuButton(view.formatMenu, "Numbered", 2, function()
+        HideNoteFormatMenu(view)
+        module:ApplyLineFormatToSelection(view.ownerTab, view.bodyInput, "numbered", {
+            selectionStart = view.formatSelectionStart,
+            selectionEnd = view.formatSelectionEnd,
+            cursorPosition = view.formatCursorPosition,
+        })
+    end)
+    view.formatMenu.buttons[3] = CreateNoteFormatMenuButton(view.formatMenu, "Task", 3, function()
+        HideNoteFormatMenu(view)
+        module:ApplyLineFormatToSelection(view.ownerTab, view.bodyInput, "task", {
+            selectionStart = view.formatSelectionStart,
+            selectionEnd = view.formatSelectionEnd,
+            cursorPosition = view.formatCursorPosition,
+        })
+    end)
+    view.formatMenu:SetHeight((ROW_MENU_PADDING * 2) + (ROW_MENU_BUTTON_HEIGHT * 3) + (ROW_MENU_SPACING * 2))
+    view.formatMenu:SetScript("OnHide", function(selfMenu)
+        for _, button in ipairs(selfMenu.buttons or {}) do
+            button.highlight:Hide()
+        end
+    end)
 
     view.previewLabelButton = CreateFrame("Button", nil, view.previewToggle)
     view.previewLabelButton:SetHeight(NOTE_TAB_TOP_ROW_HEIGHT)
@@ -1703,30 +1828,43 @@ function module:CreateTab(frame, definition, index)
         local view = self:GetNoteTabEditView(tab.panel)
         local readView = self:GetNoteTabReadView(tab.panel)
         if view then
+            view.ownerTab = tab
             view.saveButton:SetScript("OnClick", function()
+                HideNoteFormatMenu(view)
                 module:SaveNoteTab(tab)
             end)
             view.previewCheck:SetScript("OnClick", function(check)
+                HideNoteFormatMenu(view)
                 module:SetNotePreviewEnabled(tab, check:GetChecked() and true or false)
             end)
             view.previewLabelButton:SetScript("OnClick", function()
+                HideNoteFormatMenu(view)
                 local nextValue = not view.previewCheck:GetChecked()
                 view.previewCheck:SetChecked(nextValue)
                 module:SetNotePreviewEnabled(tab, nextValue)
             end)
-            view.deleteButton:SetScript("OnClick", function()
-                module:ConfirmDeleteNoteFromTab(tab)
+            view.formatButton:SetScript("OnClick", function()
+                ToggleNoteFormatMenu(view)
+            end)
+            view.formatButton:SetScript("OnMouseDown", function(_, button)
+                if button == "LeftButton" then
+                    SnapshotNoteFormatSelection(view)
+                end
             end)
             view.modeButton:SetScript("OnClick", function()
+                HideNoteFormatMenu(view)
                 module:HandleNoteModeButtonClicked(tab)
             end)
             view.closeButton:SetScript("OnClick", function()
+                HideNoteFormatMenu(view)
                 module:RequestCloseTab(tab)
             end)
             view.titleInput:SetScript("OnEscapePressed", function(editBox)
+                HideNoteFormatMenu(view)
                 editBox:ClearFocus()
             end)
             view.titleInput:SetScript("OnEnterPressed", function(editBox)
+                HideNoteFormatMenu(view)
                 editBox:ClearFocus()
                 module:SaveNoteTab(tab)
             end)
@@ -1737,10 +1875,12 @@ function module:CreateTab(frame, definition, index)
             end)
 
             view.bodyInput:SetScript("OnEscapePressed", function(editBox)
+                HideNoteFormatMenu(view)
                 editBox:ClearFocus()
             end)
             view.bodyInput:SetScript("OnCursorChanged", function(editBox, x, y, width, height)
                 ScrollingEdit_OnCursorChanged(editBox, x, y, width, height)
+                SnapshotNoteFormatSelection(view)
                 UpdateNoteEditLineNumbers(tab, view)
                 SyncNoteEditGutterScroll(view)
                 UpdateNoteEditScrollBar(view)
@@ -1754,6 +1894,7 @@ function module:CreateTab(frame, definition, index)
                 if ScrollingEdit_OnTextChanged then
                     ScrollingEdit_OnTextChanged(editBox, view.bodyScrollFrame)
                 end
+                SnapshotNoteFormatSelection(view)
                 if userInput then
                     module:HandleNoteTabContentChanged(tab)
                 end
@@ -1761,19 +1902,30 @@ function module:CreateTab(frame, definition, index)
                 UpdateNoteEditScrollBar(view)
                 SyncNoteEditGutterScroll(view)
             end)
+            view.bodyInput:SetScript("OnEnterPressed", function(editBox)
+                HideNoteFormatMenu(view)
+                if not module:TryHandleNoteSmartEnter(tab, editBox) then
+                    editBox:Insert("\n")
+                end
+            end)
             view.bodyInput:SetScript("OnEditFocusLost", function(editBox)
                 editBox:HighlightText(0, 0)
+            end)
+            view.bodyInput:HookScript("OnMouseUp", function()
+                SnapshotNoteFormatSelection(view)
             end)
             view.bodyInput:SetScript("OnReceiveDrag", function(editBox)
                 module:HandleNoteBodyItemDrop(tab, editBox)
             end)
             view.bodyScrollFrame:HookScript("OnMouseDown", function(_, button)
                 if button == "LeftButton" then
+                    HideNoteFormatMenu(view)
                     FocusNoteEditBodyToEnd(view)
                 end
             end)
             view.bodyFrame:HookScript("OnMouseDown", function(_, button)
                 if button == "LeftButton" then
+                    HideNoteFormatMenu(view)
                     FocusNoteEditBodyToEnd(view)
                 end
             end)
@@ -2044,6 +2196,18 @@ function module:HideRowActionMenu()
     end
 end
 
+function module:HideNoteFormatMenus()
+    if not self.runtime or not self.runtime.noteSlots then
+        return
+    end
+
+    for _, tab in ipairs(self.runtime.noteSlots) do
+        local panel = tab and tab.panel or nil
+        local view = panel and self:GetNoteTabEditView(panel) or nil
+        HideNoteFormatMenu(view)
+    end
+end
+
 function module:CreateTabContextMenu(parent)
     local menu = CreateFrame("Frame", nil, parent)
     menu:SetFrameStrata("DIALOG")
@@ -2143,10 +2307,12 @@ function module:CreateNotesFrame()
         module:SaveWindowGeometry(selfFrame)
         module:HideRowActionMenu()
         module:HideTabContextMenu()
+        module:HideNoteFormatMenus()
     end)
     frame:SetScript("OnMouseDown", function()
         module:HideRowActionMenu()
         module:HideTabContextMenu()
+        module:HideNoteFormatMenus()
     end)
     frame:SetScript("OnSizeChanged", function(selfFrame, width, height)
         if selfFrame.isSizingByGrip and not HasResizeCursorMoved(selfFrame) then
