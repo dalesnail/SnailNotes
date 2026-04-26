@@ -10,6 +10,7 @@ Embeds.xml
 Core\Bootstrap.lua
 Notes\NotesGuideData.lua
 Notes\Notes.lua
+Notes\NotesReminders.lua
 Notes\NotesOptions.lua
 Notes\NotesRender.lua
 Notes\NotesFloatRender.lua

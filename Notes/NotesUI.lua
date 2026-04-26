@@ -867,6 +867,27 @@ local function ToggleNoteFormatMenu(view)
     view.formatMenu:Show()
 end
 
+local function HideNoteReadOptionsMenu(view)
+    if view and view.optionsMenu and view.optionsMenu:IsShown() then
+        view.optionsMenu:Hide()
+    end
+end
+
+local function ToggleNoteReadOptionsMenu(view)
+    if not view or not view.optionsMenu then
+        return
+    end
+
+    if view.optionsMenu:IsShown() then
+        view.optionsMenu:Hide()
+        return
+    end
+
+    view.optionsMenu:ClearAllPoints()
+    view.optionsMenu:SetPoint("TOPRIGHT", view.optionsButton, "BOTTOMRIGHT", 0, -2)
+    view.optionsMenu:Show()
+end
+
 function module:CreateNoteEditView(parent)
     local view = CreateFrame("Frame", nil, parent)
     view:SetAllPoints()
@@ -1173,28 +1194,65 @@ function module:CreateNoteReadView(parent)
     view.modeButton:SetText("Edit")
     view.modeButton:SetPoint("RIGHT", view.closeButton, "LEFT", -NOTE_TAB_TOP_CLOSE_BUTTON_SPACING, 0)
 
-    view.deleteButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
-    view.deleteButton:SetSize(NOTE_TAB_DELETE_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
-    view.deleteButton:SetText("Delete")
-    view.deleteButton:SetPoint("RIGHT", view.modeButton, "LEFT", -4, 0)
-
-    view.exportButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
-    view.exportButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
-    view.exportButton:SetText("Export")
-    view.exportButton:SetPoint("RIGHT", view.deleteButton, "LEFT", -4, 0)
-
-    view.linkButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
-    view.linkButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
-    view.linkButton:SetText("Link")
-    view.linkButton:SetPoint("RIGHT", view.exportButton, "LEFT", -4, 0)
-
-    view.floatButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
-    view.floatButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
-    view.floatButton:SetText("Float")
-    view.floatButton:SetPoint("RIGHT", view.linkButton, "LEFT", -4, 0)
-
     view.modeButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
-    view.deleteButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
+
+    view.optionsButton = CreateFrame("Button", nil, view.topRow, "UIPanelButtonTemplate")
+    view.optionsButton:SetSize(NOTE_READ_ACTION_BUTTON_WIDTH, NOTE_TAB_TOP_ROW_HEIGHT)
+    view.optionsButton:SetText("Options")
+    view.optionsButton:SetPoint("RIGHT", view.modeButton, "LEFT", -4, 0)
+
+    view.optionsMenu = CreateFrame("Frame", nil, view.topRow)
+    view.optionsMenu:SetFrameStrata("DIALOG")
+    view.optionsMenu:SetFrameLevel((view.topRow:GetFrameLevel() or 1) + 40)
+    view.optionsMenu:SetWidth(ROW_MENU_WIDTH - 16)
+    view.optionsMenu.background = view.optionsMenu:CreateTexture(nil, "BACKGROUND")
+    view.optionsMenu.background:SetAllPoints()
+    view.optionsMenu.background:SetTexture(ROW_MENU_BACKGROUND_TEXTURE)
+    view.optionsMenu.background:SetVertexColor(unpack(ROW_MENU_BACKGROUND_COLOR))
+    view.optionsMenu:Hide()
+    view.optionsMenu.buttons = {}
+
+    view.optionsMenu.buttons[1] = CreateNoteFormatMenuButton(view.optionsMenu, "Float", 1, function()
+        HideNoteReadOptionsMenu(view)
+        if view.onFloatSelected then
+            view.onFloatSelected()
+        end
+    end)
+    view.optionsMenu.buttons[2] = CreateNoteFormatMenuButton(view.optionsMenu, "Link", 2, function()
+        HideNoteReadOptionsMenu(view)
+        if view.onLinkSelected then
+            view.onLinkSelected()
+        end
+    end)
+    view.optionsMenu.buttons[3] = CreateNoteFormatMenuButton(view.optionsMenu, "Export", 3, function()
+        HideNoteReadOptionsMenu(view)
+        if view.onExportSelected then
+            view.onExportSelected()
+        end
+    end)
+    view.optionsMenu.buttons[4] = CreateNoteFormatMenuButton(view.optionsMenu, "Delete", 4, function()
+        HideNoteReadOptionsMenu(view)
+        if view.onDeleteSelected then
+            view.onDeleteSelected()
+        end
+    end)
+    view.optionsMenu.buttons[4]:ClearAllPoints()
+    view.optionsMenu.buttons[4]:SetPoint("LEFT", ROW_MENU_PADDING, 0)
+    view.optionsMenu.buttons[4]:SetPoint("RIGHT", -ROW_MENU_PADDING, 0)
+    view.optionsMenu.buttons[4]:SetPoint("TOP", view.optionsMenu.buttons[3], "BOTTOM", 0, -(ROW_MENU_SPACING + 4))
+
+    view.optionsMenu.separator = view.optionsMenu:CreateTexture(nil, "ARTWORK")
+    view.optionsMenu.separator:SetHeight(1)
+    view.optionsMenu.separator:SetPoint("LEFT", ROW_MENU_PADDING + 8, 0)
+    view.optionsMenu.separator:SetPoint("RIGHT", -(ROW_MENU_PADDING + 8), 0)
+    view.optionsMenu.separator:SetPoint("BOTTOM", view.optionsMenu.buttons[4], "TOP", 0, 2)
+    view.optionsMenu.separator:SetColorTexture(1, 1, 1, 0.20)
+    view.optionsMenu:SetHeight((ROW_MENU_PADDING * 2) + (ROW_MENU_BUTTON_HEIGHT * 4) + (ROW_MENU_SPACING * 2) + (ROW_MENU_SPACING + 4))
+    view.optionsMenu:SetScript("OnHide", function(selfMenu)
+        for _, button in ipairs(selfMenu.buttons or {}) do
+            button.highlight:Hide()
+        end
+    end)
 
     view.titleText = view.topRow:CreateFontString(nil, "ARTWORK", "GameFontHighlightLarge")
     view.titleText:SetWidth(NOTE_TAB_TITLE_WIDTH)
@@ -1204,7 +1262,7 @@ function module:CreateNoteReadView(parent)
 
     view.metaText = view.topRow:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     view.metaText:SetPoint("LEFT", view.titleText, "RIGHT", NOTE_TAB_TITLE_TO_META_SPACING, 0)
-    view.metaText:SetPoint("RIGHT", view.floatButton, "LEFT", -NOTE_TAB_READ_TITLE_RIGHT_INSET, 0)
+    view.metaText:SetPoint("RIGHT", view.optionsButton, "LEFT", -NOTE_TAB_READ_TITLE_RIGHT_INSET, 0)
     view.metaText:SetJustifyH("LEFT")
     view.metaText:SetJustifyV("MIDDLE")
 
@@ -1768,6 +1826,7 @@ function module:SelectTab(tabKey)
     runtime.activeTabKey = tabKey
     self:HideRowActionMenu()
     self:HideTabContextMenu()
+    self:HideNoteReadOptionsMenus()
 
     for _, entry in ipairs(runtime.orderedTabs) do
         local visible = self:IsTabVisible(entry)
@@ -1960,31 +2019,41 @@ function module:CreateTab(frame, definition, index)
             end)
         end
         if readView then
-            readView.floatButton:SetScript("OnClick", function()
+            local function handleFloatAction()
                 local noteId = tab and tab.noteData and tab.noteData.noteId or nil
                 if noteId then
                     module:ShowFloatWindow(noteId)
                 end
-            end)
-            readView.linkButton:SetScript("OnClick", function()
+            end
+            local function handleLinkAction()
                 local noteId = tab and tab.noteData and tab.noteData.noteId or nil
                 if noteId then
                     module:ShowNoteLinkDialog(noteId, module:GetNoteTabStoredTitle(tab))
                 end
-            end)
-            readView.exportButton:SetScript("OnClick", function()
+            end
+            local function handleExportAction()
                 local noteId = tab and tab.noteData and tab.noteData.noteId or nil
                 if noteId then
                     module:ShowNoteExportDialog(noteId)
                 end
-            end)
-            readView.deleteButton:SetScript("OnClick", function()
+            end
+            local function handleDeleteAction()
                 module:ConfirmDeleteNoteFromTab(tab)
+            end
+
+            readView.onFloatSelected = handleFloatAction
+            readView.onLinkSelected = handleLinkAction
+            readView.onExportSelected = handleExportAction
+            readView.onDeleteSelected = handleDeleteAction
+            readView.optionsButton:SetScript("OnClick", function()
+                ToggleNoteReadOptionsMenu(readView)
             end)
             readView.modeButton:SetScript("OnClick", function()
+                HideNoteReadOptionsMenu(readView)
                 module:HandleNoteModeButtonClicked(tab)
             end)
             readView.closeButton:SetScript("OnClick", function()
+                HideNoteReadOptionsMenu(readView)
                 module:RequestCloseTab(tab)
             end)
             readView.bodyFrame:SetScript("OnSizeChanged", function()
@@ -2208,6 +2277,18 @@ function module:HideNoteFormatMenus()
     end
 end
 
+function module:HideNoteReadOptionsMenus()
+    if not self.runtime or not self.runtime.noteSlots then
+        return
+    end
+
+    for _, tab in ipairs(self.runtime.noteSlots) do
+        local panel = tab and tab.panel or nil
+        local view = panel and self:GetNoteTabReadView(panel) or nil
+        HideNoteReadOptionsMenu(view)
+    end
+end
+
 function module:CreateTabContextMenu(parent)
     local menu = CreateFrame("Frame", nil, parent)
     menu:SetFrameStrata("DIALOG")
@@ -2308,11 +2389,13 @@ function module:CreateNotesFrame()
         module:HideRowActionMenu()
         module:HideTabContextMenu()
         module:HideNoteFormatMenus()
+        module:HideNoteReadOptionsMenus()
     end)
     frame:SetScript("OnMouseDown", function()
         module:HideRowActionMenu()
         module:HideTabContextMenu()
         module:HideNoteFormatMenus()
+        module:HideNoteReadOptionsMenus()
     end)
     frame:SetScript("OnSizeChanged", function(selfFrame, width, height)
         if selfFrame.isSizingByGrip and not HasResizeCursorMoved(selfFrame) then

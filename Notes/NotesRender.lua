@@ -109,18 +109,34 @@ local function IsReadViewCodeFence(rawLine)
 end
 
 local function SplitNoteBodyIntoLines(bodyText)
+    if type(bodyText) == "table" then
+        return bodyText
+    end
+
+    if module.BuildDisplayLinesWithSourceIndexes then
+        return module:BuildDisplayLinesWithSourceIndexes(bodyText)
+    end
+
     local text = tostring(bodyText or "")
     local normalizedText = string.gsub(text, "\r\n", "\n")
     normalizedText = string.gsub(normalizedText, "\r", "\n")
 
     local lines = {}
     if normalizedText == "" then
-        lines[1] = ""
+        lines[1] = {
+            text = "",
+            sourceLineIndex = 1,
+        }
         return lines
     end
 
+    local sourceLineIndex = 0
     for line in string.gmatch(normalizedText .. "\n", "(.-)\n") do
-        lines[#lines + 1] = line
+        sourceLineIndex = sourceLineIndex + 1
+        lines[#lines + 1] = {
+            text = line,
+            sourceLineIndex = sourceLineIndex,
+        }
     end
 
     return lines
@@ -410,6 +426,8 @@ local function BuildReadViewRenderPlan(bodyText)
     local isCenteredBlock = false
     local isCodeBlock = false
     local codeBlockLines = {}
+    local codeBlockSourceLineIndex = nil
+    local codeFenceSourceLineIndex = nil
     local paragraphLines = nil
     local paragraphSourceLineIndex = nil
 
@@ -442,6 +460,7 @@ local function BuildReadViewRenderPlan(bodyText)
             entries[#entries + 1] = {
                 lineType = "code",
                 displayText = table.concat(codeBlockLines, "\n"),
+                sourceLineIndex = codeBlockSourceLineIndex,
                 indentOffset = 0,
                 isCentered = false,
             }
@@ -449,6 +468,8 @@ local function BuildReadViewRenderPlan(bodyText)
 
         wipe(codeBlockLines)
         isCodeBlock = false
+        codeBlockSourceLineIndex = nil
+        codeFenceSourceLineIndex = nil
     end
 
     local function FlushMalformedCodeBlock()
@@ -460,6 +481,7 @@ local function BuildReadViewRenderPlan(bodyText)
         entries[#entries + 1] = {
             lineType = "plain",
             displayText = "```",
+            sourceLineIndex = codeFenceSourceLineIndex,
             indentOffset = 0,
             isCentered = false,
         }
@@ -468,6 +490,7 @@ local function BuildReadViewRenderPlan(bodyText)
             entries[#entries + 1] = {
                 lineType = "plain",
                 displayText = codeLine,
+                sourceLineIndex = codeBlockSourceLineIndex,
                 indentOffset = 0,
                 isCentered = false,
             }
@@ -475,18 +498,26 @@ local function BuildReadViewRenderPlan(bodyText)
 
         wipe(codeBlockLines)
         isCodeBlock = false
+        codeBlockSourceLineIndex = nil
+        codeFenceSourceLineIndex = nil
     end
 
-    for lineIndex, lineText in ipairs(lines) do
+    for lineIndex, lineData in ipairs(lines) do
+        local lineText = lineData and lineData.text or ""
+        local sourceLineIndex = lineData and lineData.sourceLineIndex or lineIndex
         if isCodeBlock then
             if IsReadViewCodeFence(lineText) then
                 FlushCodeBlock()
             else
+                if not codeBlockSourceLineIndex then
+                    codeBlockSourceLineIndex = sourceLineIndex
+                end
                 codeBlockLines[#codeBlockLines + 1] = lineText
             end
         elseif IsReadViewCodeFence(lineText) then
             FlushParagraph()
             isCodeBlock = true
+            codeFenceSourceLineIndex = sourceLineIndex
             wipe(codeBlockLines)
         elseif IsReadViewCenteredBlockStart(lineText) then
             FlushParagraph()
@@ -495,7 +526,13 @@ local function BuildReadViewRenderPlan(bodyText)
             FlushParagraph()
             isCenteredBlock = false
         else
-            local lineType, displayText, markerText = ClassifyReadViewLine(lineText)
+            local lineType, displayText, markerText
+            if lineData and lineData.lineType then
+                lineType = lineData.lineType
+                displayText = lineText
+            else
+                lineType, displayText, markerText = ClassifyReadViewLine(lineText)
+            end
             local anchorId = nil
             if lineType == "h1" or lineType == "h2" or lineType == "h3" then
                 displayText, anchorId = ParseReadViewHeaderAnchorSuffix(displayText)
@@ -505,7 +542,7 @@ local function BuildReadViewRenderPlan(bodyText)
             if lineType == "plain" and not isCentered then
                 paragraphLines = paragraphLines or {}
                 if #paragraphLines == 0 then
-                    paragraphSourceLineIndex = lineIndex
+                    paragraphSourceLineIndex = sourceLineIndex
                 end
                 paragraphLines[#paragraphLines + 1] = displayText
             else
@@ -514,7 +551,8 @@ local function BuildReadViewRenderPlan(bodyText)
                     lineType = lineType,
                     displayText = displayText,
                     markerText = markerText,
-                    sourceLineIndex = lineIndex,
+                    sourceLineIndex = sourceLineIndex,
+                    noteId = lineData and lineData.noteId or nil,
                     indentOffset = (IsReadListLineType(lineType) and not isCentered) and READ_BULLET_INDENT or 0,
                     isCentered = isCentered,
                     anchorId = anchorId,

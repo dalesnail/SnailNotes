@@ -108,6 +108,9 @@ local function GetFloatMarkerTextColor()
 end
 
 local function GetFloatSegmentColor(lineType, segmentData)
+    if lineType == "reminderNoteTitle" then
+        return { 0.52, 0.52, 0.52 }
+    end
     if segmentData.kind == "noteLink" or segmentData.kind == "anchorLink" then
         return segmentData.isResolved and FLOAT_LINK_COLOR or READ_UNRESOLVED_ITEM_TOKEN_COLOR
     end
@@ -205,6 +208,8 @@ local function GetFloatLineFontSize(lineType)
         baseFontSize = FLOAT_HEADER3_FONT_SIZE
     elseif lineType == "code" then
         baseFontSize = FLOAT_CODE_FONT_SIZE
+    elseif lineType == "reminderNoteTitle" then
+        baseFontSize = 12
     end
 
     local scale = module.GetFloatFontScale and module:GetFloatFontScale() or 1
@@ -427,7 +432,25 @@ local function GetOrCreateFloatLineRow(view, index)
             return
         end
 
-        module:ToggleTaskLineAtIndex(targetTab, sourceLineIndex)
+        local parentRow = buttonFrame:GetParent()
+        local readView = parentRow and parentRow.readView or nil
+        local toggled = module:ToggleTaskLineAtIndex(targetTab, sourceLineIndex)
+        if not toggled then
+            return
+        end
+
+        if readView and readView.isReminderView then
+            if targetTab.dirty and module.SaveNoteTabInternal then
+                module:SaveNoteTabInternal(targetTab, {
+                    allowBlankTitle = true,
+                    keepEditMode = module:IsNoteTabInEditMode(targetTab),
+                    preserveReadScroll = true,
+                })
+            end
+            if module.RefreshReminderFloatWindow then
+                module:RefreshReminderFloatWindow()
+            end
+        end
     end)
 
     row.separator = row:CreateTexture(nil, "ARTWORK")
@@ -461,6 +484,7 @@ local function HideFloatLineRow(row)
     row.atlasTexture:Hide()
     row.markerButton.noteId = nil
     row.markerButton.sourceLineIndex = nil
+    row.noteId = nil
     row.markerButton:Hide()
     HideUnusedFloatChunks(row)
     row:Hide()
@@ -505,7 +529,7 @@ local function RenderFloatInlineRow(view, row, entry, segments)
         row.markerButton:ClearAllPoints()
         row.markerButton:SetPoint("TOPLEFT", row, "TOPLEFT", leftInset, -topInset)
         row.markerButton:SetSize(math.max(markerWidth, 1), math.max(markerHeight, 1))
-        row.markerButton.noteId = isTask and view.noteId or nil
+        row.markerButton.noteId = isTask and (entry.noteId or view.noteId) or nil
         row.markerButton.sourceLineIndex = isTask and entry.sourceLineIndex or nil
         row.markerButton:EnableMouse(isTask and row.markerButton.noteId ~= nil)
         row.markerButton:Show()
@@ -707,6 +731,11 @@ function module:UpdateFloatRenderSettings(view)
     end
 
     if view.settingsButton and view.settingsButton.text then
+        if view.isReminderView then
+            view.settingsButton:Hide()
+            return
+        end
+        view.settingsButton:Show()
         view.settingsButton.text:SetText("Edit Note")
     end
 end
@@ -805,6 +834,7 @@ function module:RefreshFloatReadView(view, bodyText, preserveScroll)
             row:ClearAllPoints()
             row.anchorId = entry.anchorId
             row.sourceLineIndex = entry.sourceLineIndex
+            row.noteId = entry.noteId
             row.isCentered = entry.isCentered and true or false
             row.lineType = entry.lineType
             row.separator:Hide()

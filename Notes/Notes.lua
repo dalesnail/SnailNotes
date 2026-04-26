@@ -1041,6 +1041,63 @@ local function GetNoteBodySelectionBounds(editBox)
     return selectionStart, selectionEnd
 end
 
+local function ParseNoteSmartEnterListLine(lineText)
+    local line = tostring(lineText or "")
+    local indentation, checkboxState, content = string.match(line, "^([ \t]*)%- %[([xX]?)%](.*)$")
+    if indentation then
+        if content ~= "" and not string.match(content, "^%s") then
+            return nil
+        end
+
+        local hasOnlyMarker = string.match(line, "^([ \t]*)%- %[[xX]?%]%s*$") ~= nil
+        return {
+            kind = "checklist",
+            indentation = indentation,
+            content = content or "",
+            continuationText = "\n" .. indentation .. "- [] ",
+            isTrulyEmpty = hasOnlyMarker or string.match(content or "", "^%s*$") ~= nil,
+            isExactEmptyMarker = hasOnlyMarker,
+        }
+    end
+
+    indentation, content = string.match(line, "^([ \t]*)%-(.*)$")
+    if indentation then
+        if content ~= "" and not string.match(content, "^%s") then
+            return nil
+        end
+
+        local hasOnlyMarker = string.match(line, "^([ \t]*)%-%s*$") ~= nil
+        return {
+            kind = "bullet",
+            indentation = indentation,
+            content = content or "",
+            continuationText = "\n" .. indentation .. "- ",
+            isTrulyEmpty = hasOnlyMarker or string.match(content or "", "^%s*$") ~= nil,
+            isExactEmptyMarker = hasOnlyMarker,
+        }
+    end
+
+    local currentNumber
+    indentation, currentNumber, content = string.match(line, "^([ \t]*)(%d+)%.(.*)$")
+    if indentation then
+        if content ~= "" and not string.match(content, "^%s") then
+            return nil
+        end
+
+        local hasOnlyMarker = string.match(line, "^([ \t]*)%d+%.%s*$") ~= nil
+        return {
+            kind = "numbered",
+            indentation = indentation,
+            content = content or "",
+            continuationText = "\n" .. indentation .. tostring((tonumber(currentNumber) or 0) + 1) .. ". ",
+            isTrulyEmpty = hasOnlyMarker or string.match(content or "", "^%s*$") ~= nil,
+            isExactEmptyMarker = hasOnlyMarker,
+        }
+    end
+
+    return nil
+end
+
 local function StripSimpleNoteListPrefix(lineText)
     local line = tostring(lineText or "")
     local indentation, remainder = string.match(line, "^([ \t]*)%- %[[xX]?%]%s*(.*)$")
@@ -1155,56 +1212,33 @@ function module:TryHandleNoteSmartEnter(tab, editBox)
         return false
     end
 
+    local selectionStart, selectionEnd = GetNoteBodySelectionBounds(editBox)
+    if selectionStart ~= nil and selectionEnd ~= nil then
+        return false
+    end
+
     local currentText, cursorPosition, lineStart, lineEnd = GetNoteBodyLineBounds(
         editBox:GetText(),
         editBox.GetCursorPosition and editBox:GetCursorPosition() or 0
     )
     local currentLine = string.sub(currentText, lineStart, lineEnd)
-    local indentation, remainder = string.match(currentLine, "^([ \t]*)%- %[([xX]?)%](.*)$")
-    local insertText
-
-    if indentation then
-        insertText = "\n" .. indentation .. "- [] "
-    else
-        local bulletIndentation, bulletRemainder = string.match(currentLine, "^([ \t]*)%-$")
-        if bulletIndentation then
-            indentation = bulletIndentation
-            remainder = ""
-            insertText = "\n" .. indentation .. "- "
-        else
-            bulletIndentation, bulletRemainder = string.match(currentLine, "^([ \t]*)%-(%s.*)$")
-            if bulletIndentation then
-                indentation = bulletIndentation
-                remainder = bulletRemainder
-                insertText = "\n" .. indentation .. "- "
-            else
-                local numberedIndentation, currentNumber, numberedRemainder = string.match(currentLine, "^([ \t]*)(%d+)%.(.*)$")
-                if not numberedIndentation then
-                    return false
-                end
-                if numberedRemainder ~= "" and not string.match(numberedRemainder, "^%s") then
-                    return false
-                end
-
-                indentation = numberedIndentation
-                remainder = numberedRemainder
-                insertText = "\n" .. indentation .. tostring((tonumber(currentNumber) or 0) + 1) .. ". "
-            end
-        end
-    end
-
-    if not indentation then
+    local parsedLine = ParseNoteSmartEnterListLine(currentLine)
+    if not parsedLine then
         return false
     end
 
-    local isEmptyListLine = string.match(remainder or "", "^%s*$") ~= nil
-    if isEmptyListLine then
+    if parsedLine.isTrulyEmpty then
+        if not parsedLine.isExactEmptyMarker then
+            return false
+        end
+
         local updatedText = ReplaceNoteBodyRange(currentText, lineStart, lineEnd, "")
         local updatedCursorPosition = math.max(lineStart - 1, 0)
         return ApplyNoteBodyEditBoxText(tab, editBox, updatedText, updatedCursorPosition)
     end
 
     local insertAt = cursorPosition
+    local insertText = parsedLine.continuationText
     local updatedText = string.sub(currentText, 1, insertAt) .. insertText .. string.sub(currentText, insertAt + 1)
     local updatedCursorPosition = insertAt + string.len(insertText)
     return ApplyNoteBodyEditBoxText(tab, editBox, updatedText, updatedCursorPosition)
@@ -2588,11 +2622,17 @@ function module:OnInitialize()
     LibDeflate = LibStub and LibStub("LibDeflate", true) or nil
     self:EnsureRuntime()
     self:GetNoteStore()
+    if self.InitializeReminderEvents then
+        self:InitializeReminderEvents()
+    end
 end
 
 function module:OnEnable()
     self:EnsureRuntime()
     self:Refresh()
+    if self.TriggerLoginRemindersOnce then
+        self:TriggerLoginRemindersOnce()
+    end
 end
 
 function module:OnDisable()
