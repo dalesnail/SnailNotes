@@ -2,7 +2,7 @@
 ## Title: SnailNotes
 ## Notes: Notes addon.
 ## Author: Dalesnail
-## Version: v1.2.0
+## Version: v1.4.0
 ## SavedVariables: SnailNotesDB
 
 Embeds.xml
