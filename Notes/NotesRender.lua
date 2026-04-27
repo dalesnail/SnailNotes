@@ -428,13 +428,22 @@ local function BuildReadViewRenderPlan(bodyText)
     local codeBlockLines = {}
     local codeBlockSourceLineIndex = nil
     local codeFenceSourceLineIndex = nil
+    local codeBlockNoteId = nil
+    local codeBlockReminderBlockKey = nil
+    local codeBlockReminderDone = nil
     local paragraphLines = nil
     local paragraphSourceLineIndex = nil
+    local paragraphNoteId = nil
+    local paragraphReminderBlockKey = nil
+    local paragraphReminderDone = nil
 
     local function FlushParagraph()
         if not paragraphLines or #paragraphLines == 0 then
             paragraphLines = nil
             paragraphSourceLineIndex = nil
+            paragraphNoteId = nil
+            paragraphReminderBlockKey = nil
+            paragraphReminderDone = nil
             return
         end
 
@@ -442,12 +451,18 @@ local function BuildReadViewRenderPlan(bodyText)
             lineType = "plain",
             displayText = table.concat(paragraphLines, "\n"),
             sourceLineIndex = paragraphSourceLineIndex,
+            noteId = paragraphNoteId,
+            reminderBlockKey = paragraphReminderBlockKey,
+            reminderDone = paragraphReminderDone == true,
             indentOffset = 0,
             isCentered = false,
         }
 
         paragraphLines = nil
         paragraphSourceLineIndex = nil
+        paragraphNoteId = nil
+        paragraphReminderBlockKey = nil
+        paragraphReminderDone = nil
     end
 
     local function FlushCodeBlock()
@@ -461,6 +476,9 @@ local function BuildReadViewRenderPlan(bodyText)
                 lineType = "code",
                 displayText = table.concat(codeBlockLines, "\n"),
                 sourceLineIndex = codeBlockSourceLineIndex,
+                noteId = codeBlockNoteId,
+                reminderBlockKey = codeBlockReminderBlockKey,
+                reminderDone = codeBlockReminderDone == true,
                 indentOffset = 0,
                 isCentered = false,
             }
@@ -470,6 +488,9 @@ local function BuildReadViewRenderPlan(bodyText)
         isCodeBlock = false
         codeBlockSourceLineIndex = nil
         codeFenceSourceLineIndex = nil
+        codeBlockNoteId = nil
+        codeBlockReminderBlockKey = nil
+        codeBlockReminderDone = nil
     end
 
     local function FlushMalformedCodeBlock()
@@ -500,6 +521,9 @@ local function BuildReadViewRenderPlan(bodyText)
         isCodeBlock = false
         codeBlockSourceLineIndex = nil
         codeFenceSourceLineIndex = nil
+        codeBlockNoteId = nil
+        codeBlockReminderBlockKey = nil
+        codeBlockReminderDone = nil
     end
 
     for lineIndex, lineData in ipairs(lines) do
@@ -511,6 +535,9 @@ local function BuildReadViewRenderPlan(bodyText)
             else
                 if not codeBlockSourceLineIndex then
                     codeBlockSourceLineIndex = sourceLineIndex
+                    codeBlockNoteId = lineData and lineData.noteId or nil
+                    codeBlockReminderBlockKey = lineData and lineData.reminderBlockKey or nil
+                    codeBlockReminderDone = lineData and lineData.reminderDone == true or nil
                 end
                 codeBlockLines[#codeBlockLines + 1] = lineText
             end
@@ -543,6 +570,9 @@ local function BuildReadViewRenderPlan(bodyText)
                 paragraphLines = paragraphLines or {}
                 if #paragraphLines == 0 then
                     paragraphSourceLineIndex = sourceLineIndex
+                    paragraphNoteId = lineData and lineData.noteId or nil
+                    paragraphReminderBlockKey = lineData and lineData.reminderBlockKey or nil
+                    paragraphReminderDone = lineData and lineData.reminderDone == true or nil
                 end
                 paragraphLines[#paragraphLines + 1] = displayText
             else
@@ -553,6 +583,8 @@ local function BuildReadViewRenderPlan(bodyText)
                     markerText = markerText,
                     sourceLineIndex = sourceLineIndex,
                     noteId = lineData and lineData.noteId or nil,
+                    reminderBlockKey = lineData and lineData.reminderBlockKey or nil,
+                    reminderDone = lineData and lineData.reminderDone == true,
                     indentOffset = (IsReadListLineType(lineType) and not isCentered) and READ_BULLET_INDENT or 0,
                     isCentered = isCentered,
                     anchorId = anchorId,

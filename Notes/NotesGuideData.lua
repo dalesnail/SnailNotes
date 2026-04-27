@@ -8,8 +8,7 @@ body = [=[
 
 [c]
 # Notes Guide [top]
-**__Welcome to SnailNotes.__**
-[@atlas GarrMission_RewardsBanner]
+[@atlas GarrMission_ListGlow-Select 800x30]
 [/c]
 ## Index [index]
 (Basic Text)[basic-text]
@@ -27,6 +26,7 @@ body = [=[
 (Read vs Edit)[read-vs-edit]
 (Header Anchors And Jump Links)[header-anchors-and-jump-links]
 (External Note Links)[external-note-links]
+(Reminders)[reminders]
 
 ---
 
@@ -318,17 +318,137 @@ Use:
 You can generate a ready-to-paste note link from:
 
 * the Home tab right-click row menu using  `Copy Note Link`
-* the Read View  `Link` button
+* the Read View  `Link` button under options
 
 Both produce:
 
 ```
 (Note Title)[[AJH23S]]
 ```
+(Back to Top)[top]
+---
+
+# Reminder System [reminders]
+
+SnailNotes supports context-based reminders that appear automatically when certain conditions are met.
+
+## Basic Syntax
+
+Reminder blocks use the following format:
+
+```
+[! trigger]
+Reminder text
+[!]
+```
+
+## Supported Triggers
+
+`[! mail]`
+  
+When opening a mailbox
+
+`[! bank]`  
+
+When opening the bank
+
+`[! auction]`  
+
+When opening the auction house
+
+`[! login]`  
+
+When logging in
+
+`[! zone:<zone-name>]`  
+
+When entering a zone or area (use this for specific instances)
+
+`[! dungeon]`  
+
+When entering any 5-man dungeon
+
+`[! raid]`
+
+When entering any raid
+
+
+## Examples
+```
+[! zone:stormwind-city]
+Buy reagents
+[!]
 
 ---
 
-  (Back to Top)[top]
+[! dungeon]
+You can have
+Multiple Lines
+in a reminder block
+
+- [] As well as
+- [] Checklist items
+
+Or almost any other formatting, Including textures
+[!]
+```
+
+
+## Character-Specific Reminders
+
+You can limit reminders to a specific character:
+
+**Example:**
+```
+[! mail:dalesnail]
+Check alt mail
+[!]
+
+[! zone:stormwind:dalesnail]
+Do Stormwind stuff
+[!]
+```
+
+
+## Done Flag
+
+You can mark reminders as complete like this:
+```
+[! mail done]
+```
+Or you can toggle them as done in the reminder window
+
+**Done reminders:**
+- Do not trigger
+- Still exist in the note
+- Can be toggled in the reminder window
+
+## In-Game Reminder Window
+
+When triggered, reminders appear in a popup window.
+
+**Features:**
+- Checklist items can be toggled
+- "Done" / "Undo" marks a reminder complete
+- "Open Note" jumps to the source note
+- Manual close (X) temporarily dismisses reminders for the current context
+
+## Zone Behavior
+
+**Zone reminders:**
+- Trigger when entering a matching zone
+- Support flexible matching (e.g. "stormwind" matches "Stormwind City")
+- Stay dismissed if closed manually until leaving the zone and re-entering
+
+## Notes Behavior
+
+- Reminder blocks are hidden in normal rendering (tags are not shown)
+- Multiple reminders from one note are grouped together
+- Reminders update automatically based on game events
+
+---
+
+(Back to Top)[top]
 
 ]=],
 updatedAt = 6,

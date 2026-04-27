@@ -2438,6 +2438,11 @@ function module:CreateNotesFrame()
         module:RefreshTabLayout()
         module:SelectTab(module.runtime.activeTabKey or "home")
     end)
+    frame:SetScript("OnHide", function()
+        if module.HideReminderEditWindow then
+            module:HideReminderEditWindow()
+        end
+    end)
 
     frame.inner = CreateFrame("Frame", nil, frame)
     frame.inner:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -30)

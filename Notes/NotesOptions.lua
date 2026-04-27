@@ -7,6 +7,7 @@ local constants = shared.constants
 local helpers = shared.helpers
 local CreateBackdropFrame = helpers.CreateBackdropFrame
 local HexToColorRGB = helpers.HexToColorRGB
+local AttachTooltip = helpers.AttachTooltip
 
 local HOME_BUTTON_WIDTH = constants.HOME_BUTTON_WIDTH
 local HOME_BUTTON_HEIGHT = constants.HOME_BUTTON_HEIGHT
@@ -41,6 +42,7 @@ local OPTIONS_SECTION_BUTTON_HEIGHT = 24
 local OPTIONS_SECTION_BUTTON_SPACING = 8
 local OPTIONS_SECTION_GENERAL = "general"
 local OPTIONS_SECTION_FLOAT = "float"
+local OPTIONS_SECTION_REMINDER = "reminder"
 local FLOAT_FONT_SCALE_MIN = 70
 local FLOAT_FONT_SCALE_MAX = 200
 local FLOAT_FONT_SCALE_STEP = 5
@@ -49,6 +51,10 @@ local FLOAT_BACKGROUND_ALPHA_MAX = 100
 local FLOAT_BACKGROUND_ALPHA_STEP = 5
 
 local function NormalizeOptionsSectionKey(sectionKey)
+    if sectionKey == OPTIONS_SECTION_REMINDER then
+        return OPTIONS_SECTION_REMINDER
+    end
+
     if sectionKey == OPTIONS_SECTION_FLOAT then
         return OPTIONS_SECTION_FLOAT
     end
@@ -152,7 +158,12 @@ end
 
 function module:SetActiveOptionsSectionKey(sectionKey)
     self:EnsureRuntime()
-    self.runtime.optionsSectionKey = NormalizeOptionsSectionKey(sectionKey)
+    local previousSectionKey = NormalizeOptionsSectionKey(self.runtime.optionsSectionKey)
+    local nextSectionKey = NormalizeOptionsSectionKey(sectionKey)
+    if previousSectionKey == OPTIONS_SECTION_REMINDER and nextSectionKey ~= OPTIONS_SECTION_REMINDER and self.HideReminderEditWindow then
+        self:HideReminderEditWindow()
+    end
+    self.runtime.optionsSectionKey = nextSectionKey
 end
 
 function module:OpenOptionsTab(sectionKey)
@@ -173,6 +184,10 @@ function module:CloseOptionsTab(tab)
     tab = tab or self:GetOptionsTab()
     if not tab then
         return
+    end
+
+    if self.HideReminderEditWindow then
+        self:HideReminderEditWindow()
     end
 
     tab.assigned = false
@@ -226,6 +241,18 @@ local function RefreshFloatBackgroundAlphaValueText(panel, alphaPercent)
     end
 end
 
+local function RefreshReminderFontScaleValueText(panel, scale)
+    if panel and panel.reminderFontScaleValue then
+        panel.reminderFontScaleValue:SetText(string.format("%d%%", math.floor(((tonumber(scale) or 1) * 100) + 0.5)))
+    end
+end
+
+local function RefreshReminderBackgroundAlphaValueText(panel, alphaPercent)
+    if panel and panel.reminderBackgroundAlphaValue then
+        panel.reminderBackgroundAlphaValue:SetText(string.format("%d%%", math.floor((tonumber(alphaPercent) or 0) + 0.5)))
+    end
+end
+
 local function ApplyFloatTexturesValue(panel, enabled)
     if not panel then
         return
@@ -272,6 +299,52 @@ local function ApplyFloatBackgroundAlphaValue(panel, alphaPercent)
     module:SetFloatBackgroundAlpha(normalizedPercent / 100)
 end
 
+local function ApplyReminderTexturesValue(panel, enabled)
+    if not panel then
+        return
+    end
+
+    local normalizedEnabled = enabled == true
+    panel.reminderTexturesCheck:SetChecked(normalizedEnabled)
+    module:SetReminderTexturesEnabled(normalizedEnabled)
+end
+
+local function ApplyReminderBorderValue(panel, enabled)
+    if not panel then
+        return
+    end
+
+    local normalizedEnabled = enabled == true
+    panel.reminderBorderCheck:SetChecked(normalizedEnabled)
+    module:SetReminderBorderEnabled(normalizedEnabled)
+end
+
+local function ApplyReminderFontScaleValue(panel, scale)
+    if not panel or not panel.reminderFontScaleSlider then
+        return
+    end
+
+    local normalizedPercent = math.floor(math.max(FLOAT_FONT_SCALE_MIN, math.min(FLOAT_FONT_SCALE_MAX, tonumber(scale) or 100)) + 0.5)
+    panel.updatingReminderFontScale = true
+    panel.reminderFontScaleSlider:SetValue(normalizedPercent)
+    panel.updatingReminderFontScale = nil
+    RefreshReminderFontScaleValueText(panel, normalizedPercent / 100)
+    module:SetReminderFontScale(normalizedPercent / 100)
+end
+
+local function ApplyReminderBackgroundAlphaValue(panel, alphaPercent)
+    if not panel or not panel.reminderBackgroundAlphaSlider then
+        return
+    end
+
+    local normalizedPercent = math.floor(math.max(FLOAT_BACKGROUND_ALPHA_MIN, math.min(FLOAT_BACKGROUND_ALPHA_MAX, tonumber(alphaPercent) or 0)) + 0.5)
+    panel.updatingReminderBackgroundAlpha = true
+    panel.reminderBackgroundAlphaSlider:SetValue(normalizedPercent)
+    panel.updatingReminderBackgroundAlpha = nil
+    RefreshReminderBackgroundAlphaValueText(panel, normalizedPercent)
+    module:SetReminderBackgroundAlpha(normalizedPercent / 100)
+end
+
 local function RefreshOptionsSectionVisibility(panel)
     if not panel then
         return
@@ -284,11 +357,17 @@ local function RefreshOptionsSectionVisibility(panel)
     if panel.floatSection then
         panel.floatSection:SetShown(activeSectionKey == OPTIONS_SECTION_FLOAT)
     end
+    if panel.reminderSection then
+        panel.reminderSection:SetShown(activeSectionKey == OPTIONS_SECTION_REMINDER)
+    end
     if panel.generalSectionButton then
         panel.generalSectionButton:SetEnabled(activeSectionKey ~= OPTIONS_SECTION_GENERAL)
     end
     if panel.floatSectionButton then
         panel.floatSectionButton:SetEnabled(activeSectionKey ~= OPTIONS_SECTION_FLOAT)
+    end
+    if panel.reminderSectionButton then
+        panel.reminderSectionButton:SetEnabled(activeSectionKey ~= OPTIONS_SECTION_REMINDER)
     end
 end
 
@@ -369,6 +448,15 @@ function module:CreateOptionsPanel(parent)
         module:RefreshOptionsPanel(module:GetOptionsTab())
     end)
 
+    panel.reminderSectionButton = CreateFrame("Button", nil, panel.sectionBar, "UIPanelButtonTemplate")
+    panel.reminderSectionButton:SetSize(OPTIONS_SECTION_BUTTON_WIDTH, OPTIONS_SECTION_BUTTON_HEIGHT)
+    panel.reminderSectionButton:SetPoint("LEFT", panel.floatSectionButton, "RIGHT", OPTIONS_SECTION_BUTTON_SPACING, 0)
+    panel.reminderSectionButton:SetText("Reminder")
+    panel.reminderSectionButton:SetScript("OnClick", function()
+        module:SetActiveOptionsSectionKey(OPTIONS_SECTION_REMINDER)
+        module:RefreshOptionsPanel(module:GetOptionsTab())
+    end)
+
     panel.sectionContent = CreateFrame("Frame", nil, panel.contentInset)
     panel.sectionContent:SetPoint("TOPLEFT", panel.sectionBar, "BOTTOMLEFT", 0, -12)
     panel.sectionContent:SetPoint("TOPRIGHT", panel.sectionBar, "BOTTOMRIGHT", 0, -12)
@@ -380,6 +468,9 @@ function module:CreateOptionsPanel(parent)
 
     panel.floatSection = CreateFrame("Frame", nil, panel.sectionContent)
     panel.floatSection:SetAllPoints()
+
+    panel.reminderSection = CreateFrame("Frame", nil, panel.sectionContent)
+    panel.reminderSection:SetAllPoints()
 
     panel.autoSaveCheck = CreateFrame("CheckButton", nil, panel.generalSection, "UICheckButtonTemplate")
     panel.autoSaveCheck:SetPoint("TOPLEFT", 16, -8)
@@ -556,8 +647,180 @@ function module:CreateOptionsPanel(parent)
         ApplyFloatBackgroundAlphaValue(panel, snappedValue)
     end)
 
+    panel.reminderTestButton = CreateFrame("Button", nil, panel.reminderSection, "UIPanelButtonTemplate")
+    panel.reminderTestButton:SetSize(120, OPTIONS_SECTION_BUTTON_HEIGHT)
+    panel.reminderTestButton:SetPoint("TOPLEFT", 16, -12)
+    panel.reminderTestButton:SetText("Edit")
+    if AttachTooltip then
+        AttachTooltip(panel.reminderTestButton, "Edit", "Preview and position reminder popups.")
+    end
+    panel.reminderTestButton:SetScript("OnClick", function()
+        if module.ToggleReminderTestWindow then
+            module:ToggleReminderTestWindow()
+        end
+    end)
+
+    panel.reminderTexturesCheck = CreateFrame("CheckButton", nil, panel.reminderSection, "UICheckButtonTemplate")
+    panel.reminderTexturesCheck:SetPoint("TOPLEFT", panel.reminderTestButton, "BOTTOMLEFT", 0, -12)
+
+    panel.reminderTexturesLabelButton = CreateFrame("Button", nil, panel.reminderSection)
+    panel.reminderTexturesLabelButton:SetPoint("LEFT", panel.reminderTexturesCheck, "RIGHT", 4, 0)
+    panel.reminderTexturesLabelButton:SetPoint("RIGHT", panel.reminderSection, "RIGHT", -16, 0)
+    panel.reminderTexturesLabelButton:SetHeight(24)
+
+    panel.reminderTexturesLabel = panel.reminderTexturesLabelButton:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    panel.reminderTexturesLabel:SetAllPoints()
+    panel.reminderTexturesLabel:SetJustifyH("LEFT")
+    panel.reminderTexturesLabel:SetJustifyV("MIDDLE")
+    panel.reminderTexturesLabel:SetText("Show textures in Reminder window")
+
+    panel.reminderTexturesCheck:SetScript("OnClick", function(check)
+        ApplyReminderTexturesValue(panel, check:GetChecked())
+    end)
+    panel.reminderTexturesLabelButton:SetScript("OnClick", function()
+        ApplyReminderTexturesValue(panel, not panel.reminderTexturesCheck:GetChecked())
+    end)
+
+    panel.reminderBorderCheck = CreateFrame("CheckButton", nil, panel.reminderSection, "UICheckButtonTemplate")
+    panel.reminderBorderCheck:SetPoint("TOPLEFT", panel.reminderTexturesCheck, "BOTTOMLEFT", 0, -8)
+
+    panel.reminderBorderLabelButton = CreateFrame("Button", nil, panel.reminderSection)
+    panel.reminderBorderLabelButton:SetPoint("LEFT", panel.reminderBorderCheck, "RIGHT", 4, 0)
+    panel.reminderBorderLabelButton:SetPoint("RIGHT", panel.reminderSection, "RIGHT", -16, 0)
+    panel.reminderBorderLabelButton:SetHeight(24)
+
+    panel.reminderBorderLabel = panel.reminderBorderLabelButton:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    panel.reminderBorderLabel:SetAllPoints()
+    panel.reminderBorderLabel:SetJustifyH("LEFT")
+    panel.reminderBorderLabel:SetJustifyV("MIDDLE")
+    panel.reminderBorderLabel:SetText("Show border")
+
+    panel.reminderBorderCheck:SetScript("OnClick", function(check)
+        ApplyReminderBorderValue(panel, check:GetChecked())
+    end)
+    panel.reminderBorderLabelButton:SetScript("OnClick", function()
+        ApplyReminderBorderValue(panel, not panel.reminderBorderCheck:GetChecked())
+    end)
+
+    panel.reminderFontScaleLabel = panel.reminderSection:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    panel.reminderFontScaleLabel:SetPoint("TOPLEFT", panel.reminderBorderCheck, "BOTTOMLEFT", 4, -20)
+    panel.reminderFontScaleLabel:SetText("Font size")
+
+    panel.reminderFontScaleValue = panel.reminderSection:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    panel.reminderFontScaleValue:SetPoint("LEFT", panel.reminderFontScaleLabel, "RIGHT", 12, 0)
+    panel.reminderFontScaleValue:SetText("85%")
+
+    panel.reminderFontScaleSlider = CreateFrame("Slider", nil, panel.reminderSection, "OptionsSliderTemplate")
+    panel.reminderFontScaleSlider:SetPoint("TOPLEFT", panel.reminderFontScaleLabel, "BOTTOMLEFT", -2, -12)
+    panel.reminderFontScaleSlider:SetWidth(220)
+    panel.reminderFontScaleSlider:SetMinMaxValues(FLOAT_FONT_SCALE_MIN, FLOAT_FONT_SCALE_MAX)
+    panel.reminderFontScaleSlider:SetValueStep(FLOAT_FONT_SCALE_STEP)
+    if panel.reminderFontScaleSlider.SetObeyStepOnDrag then
+        panel.reminderFontScaleSlider:SetObeyStepOnDrag(true)
+    end
+    panel.reminderFontScaleSliderBar = CreateFrame("Frame", nil, panel.reminderSection, BackdropTemplateMixin and "BackdropTemplate")
+    panel.reminderFontScaleSliderBar:SetFrameLevel(panel.reminderFontScaleSlider:GetFrameLevel())
+    panel.reminderFontScaleSliderBar:SetPoint("BOTTOMLEFT", panel.reminderFontScaleSlider, "BOTTOMLEFT", 0, 0)
+    panel.reminderFontScaleSliderBar:SetPoint("BOTTOMRIGHT", panel.reminderFontScaleSlider, "BOTTOMRIGHT", 0, 0)
+    panel.reminderFontScaleSliderBar:SetHeight(17)
+    if panel.reminderFontScaleSliderBar.SetBackdrop then
+        panel.reminderFontScaleSliderBar:SetBackdrop({
+            bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
+            edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
+            tile = true,
+            tileSize = 8,
+            edgeSize = 8,
+            insets = { left = 3, right = 3, top = 6, bottom = 6 },
+        })
+    end
+    panel.reminderFontScaleSlider:SetFrameLevel(panel.reminderFontScaleSliderBar:GetFrameLevel() + 1)
+    panel.reminderFontScaleSlider:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+    local reminderFontScaleThumb = panel.reminderFontScaleSlider:GetThumbTexture()
+    if reminderFontScaleThumb then
+        reminderFontScaleThumb:SetSize(32, 32)
+        reminderFontScaleThumb:SetDrawLayer("OVERLAY", 7)
+        reminderFontScaleThumb:SetTexCoord(0, 1, 0, 1)
+    end
+    HideSliderHelperText(panel.reminderFontScaleSlider)
+    panel.reminderFontScaleSlider:SetScript("OnValueChanged", function(slider, value)
+        if panel.updatingReminderFontScale then
+            return
+        end
+
+        local snappedValue = math.floor((value / FLOAT_FONT_SCALE_STEP) + 0.5) * FLOAT_FONT_SCALE_STEP
+        if math.abs((value or 0) - snappedValue) > 0.01 then
+            panel.updatingReminderFontScale = true
+            slider:SetValue(snappedValue)
+            panel.updatingReminderFontScale = nil
+            return
+        end
+
+        ApplyReminderFontScaleValue(panel, snappedValue)
+    end)
+
+    panel.reminderBackgroundAlphaLabel = panel.reminderSection:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    panel.reminderBackgroundAlphaLabel:SetPoint("TOPLEFT", panel.reminderFontScaleSlider, "BOTTOMLEFT", 2, -34)
+    panel.reminderBackgroundAlphaLabel:SetText("Background alpha")
+
+    panel.reminderBackgroundAlphaValue = panel.reminderSection:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    panel.reminderBackgroundAlphaValue:SetPoint("LEFT", panel.reminderBackgroundAlphaLabel, "RIGHT", 12, 0)
+    panel.reminderBackgroundAlphaValue:SetText("65%")
+
+    panel.reminderBackgroundAlphaSlider = CreateFrame("Slider", nil, panel.reminderSection, "OptionsSliderTemplate")
+    panel.reminderBackgroundAlphaSlider:SetPoint("TOPLEFT", panel.reminderBackgroundAlphaLabel, "BOTTOMLEFT", -2, -12)
+    panel.reminderBackgroundAlphaSlider:SetWidth(220)
+    panel.reminderBackgroundAlphaSlider:SetMinMaxValues(FLOAT_BACKGROUND_ALPHA_MIN, FLOAT_BACKGROUND_ALPHA_MAX)
+    panel.reminderBackgroundAlphaSlider:SetValueStep(FLOAT_BACKGROUND_ALPHA_STEP)
+    if panel.reminderBackgroundAlphaSlider.SetObeyStepOnDrag then
+        panel.reminderBackgroundAlphaSlider:SetObeyStepOnDrag(true)
+    end
+    panel.reminderBackgroundAlphaSliderBar = CreateFrame("Frame", nil, panel.reminderSection, BackdropTemplateMixin and "BackdropTemplate")
+    panel.reminderBackgroundAlphaSliderBar:SetFrameLevel(panel.reminderBackgroundAlphaSlider:GetFrameLevel())
+    panel.reminderBackgroundAlphaSliderBar:SetPoint("BOTTOMLEFT", panel.reminderBackgroundAlphaSlider, "BOTTOMLEFT", 0, 0)
+    panel.reminderBackgroundAlphaSliderBar:SetPoint("BOTTOMRIGHT", panel.reminderBackgroundAlphaSlider, "BOTTOMRIGHT", 0, 0)
+    panel.reminderBackgroundAlphaSliderBar:SetHeight(17)
+    if panel.reminderBackgroundAlphaSliderBar.SetBackdrop then
+        panel.reminderBackgroundAlphaSliderBar:SetBackdrop({
+            bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
+            edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
+            tile = true,
+            tileSize = 8,
+            edgeSize = 8,
+            insets = { left = 3, right = 3, top = 6, bottom = 6 },
+        })
+    end
+    panel.reminderBackgroundAlphaSlider:SetFrameLevel(panel.reminderBackgroundAlphaSliderBar:GetFrameLevel() + 1)
+    panel.reminderBackgroundAlphaSlider:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+    local reminderBackgroundAlphaThumb = panel.reminderBackgroundAlphaSlider:GetThumbTexture()
+    if reminderBackgroundAlphaThumb then
+        reminderBackgroundAlphaThumb:SetSize(32, 32)
+        reminderBackgroundAlphaThumb:SetDrawLayer("OVERLAY", 7)
+        reminderBackgroundAlphaThumb:SetTexCoord(0, 1, 0, 1)
+    end
+    HideSliderHelperText(panel.reminderBackgroundAlphaSlider)
+    panel.reminderBackgroundAlphaSlider:SetScript("OnValueChanged", function(slider, value)
+        if panel.updatingReminderBackgroundAlpha then
+            return
+        end
+
+        local snappedValue = math.floor((value / FLOAT_BACKGROUND_ALPHA_STEP) + 0.5) * FLOAT_BACKGROUND_ALPHA_STEP
+        if math.abs((value or 0) - snappedValue) > 0.01 then
+            panel.updatingReminderBackgroundAlpha = true
+            slider:SetValue(snappedValue)
+            panel.updatingReminderBackgroundAlpha = nil
+            return
+        end
+
+        ApplyReminderBackgroundAlphaValue(panel, snappedValue)
+    end)
+
     panel.closeButton:SetScript("OnClick", function()
         module:RequestCloseOptionsTab(module:GetOptionsTab())
+    end)
+    panel:SetScript("OnHide", function()
+        if module.HideReminderEditWindow then
+            module:HideReminderEditWindow()
+        end
     end)
 
     return panel
@@ -581,5 +844,15 @@ function module:RefreshOptionsPanel(tab)
     panel.floatBackgroundAlphaSlider:SetValue(math.floor((module:GetFloatBackgroundAlpha() * 100) + 0.5))
     panel.updatingFloatBackgroundAlpha = nil
     RefreshFloatBackgroundAlphaValueText(panel, module:GetFloatBackgroundAlpha() * 100)
+    panel.reminderTexturesCheck:SetChecked(module:IsReminderTexturesEnabled())
+    panel.reminderBorderCheck:SetChecked(module:IsReminderBorderEnabled())
+    panel.updatingReminderFontScale = true
+    panel.reminderFontScaleSlider:SetValue(math.floor((module:GetReminderFontScale() * 100) + 0.5))
+    panel.updatingReminderFontScale = nil
+    RefreshReminderFontScaleValueText(panel, module:GetReminderFontScale())
+    panel.updatingReminderBackgroundAlpha = true
+    panel.reminderBackgroundAlphaSlider:SetValue(math.floor((module:GetReminderBackgroundAlpha() * 100) + 0.5))
+    panel.updatingReminderBackgroundAlpha = nil
+    RefreshReminderBackgroundAlphaValueText(panel, module:GetReminderBackgroundAlpha() * 100)
     RefreshOptionsSectionVisibility(panel)
 end

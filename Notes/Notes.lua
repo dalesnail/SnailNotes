@@ -1472,6 +1472,19 @@ function module:RefreshNotePreview(tab)
         return false
     end
 
+    local existingPreviewWindow = self.runtime and self.runtime.previewWindow or nil
+    local existingPreviewView = existingPreviewWindow and existingPreviewWindow.readView or nil
+    local previousScrollOffset = nil
+    if existingPreviewWindow
+        and existingPreviewWindow:IsShown()
+        and existingPreviewWindow.ownerTab == tab
+        and existingPreviewView
+        and existingPreviewView.bodyScrollFrame
+        and existingPreviewView.bodyScrollFrame.GetVerticalScroll
+    then
+        previousScrollOffset = existingPreviewView.bodyScrollFrame:GetVerticalScroll() or 0
+    end
+
     local previewWindow = self:CreateNotePreviewWindow()
     local previewView = previewWindow and previewWindow.readView or nil
     if not previewView then
@@ -1482,6 +1495,7 @@ function module:RefreshNotePreview(tab)
     previewWindow.ownerTab = tab
     previewWindow:Show()
     previewView.ownerTab = tab
+    self:QueueReadViewScrollRestore(previewView, previousScrollOffset)
     self:RefreshStandaloneReadView(previewView, title, body)
     tab.previewDirty = nil
     self:UpdateReadItemInfoEventRegistration()

@@ -56,6 +56,9 @@ local FLOAT_INLINE_CODE_BACKGROUND_COLOR = { 0.02, 0.02, 0.02, 0.42 }
 local FLOAT_CODE_TEXT_COLOR = { 0.80, 0.80, 0.80 }
 local FLOAT_SETTINGS_TEXT_COLOR = { 0.88, 0.88, 0.88, 0.92 }
 local FLOAT_SETTINGS_TEXT_HOVER = { 1.0, 1.0, 1.0, 1.0 }
+local FLOAT_REMINDER_DONE_TEXT_COLOR = { 0.55, 0.55, 0.55 }
+local FLOAT_REMINDER_ACTION_COLOR = { 0.42, 0.58, 0.70, 0.95 }
+local FLOAT_REMINDER_ACTION_HOVER_COLOR = { 0.95, 0.95, 0.95, 1.0 }
 local NOTES_SCROLL_MULT = 1.25
 local NOTES_MOUSE_WHEEL_SCROLL_STEP = 40
 
@@ -110,6 +113,9 @@ end
 local function GetFloatSegmentColor(lineType, segmentData)
     if lineType == "reminderNoteTitle" then
         return { 0.52, 0.52, 0.52 }
+    end
+    if segmentData and segmentData.reminderDone then
+        return FLOAT_REMINDER_DONE_TEXT_COLOR
     end
     if segmentData.kind == "noteLink" or segmentData.kind == "anchorLink" then
         return segmentData.isResolved and FLOAT_LINK_COLOR or READ_UNRESOLVED_ITEM_TOKEN_COLOR
@@ -198,7 +204,7 @@ local function SplitFloatSegmentIntoUnits(segmentData)
     return units
 end
 
-local function GetFloatLineFontSize(lineType)
+local function GetFloatLineFontSize(view, lineType)
     local baseFontSize = FLOAT_TEXT_FONT_SIZE
     if lineType == "h1" then
         baseFontSize = FLOAT_HEADER1_FONT_SIZE
@@ -213,6 +219,9 @@ local function GetFloatLineFontSize(lineType)
     end
 
     local scale = module.GetFloatFontScale and module:GetFloatFontScale() or 1
+    if view and view.isReminderView and module.GetReminderFontScale then
+        scale = module:GetReminderFontScale()
+    end
     return math.max(math.floor((baseFontSize * scale) + 0.5), 1)
 end
 
@@ -448,8 +457,64 @@ local function GetOrCreateFloatLineRow(view, index)
                 })
             end
             if module.RefreshReminderFloatWindow then
-                module:RefreshReminderFloatWindow()
+                module:RefreshReminderFloatWindow(true)
             end
+        end
+    end)
+
+    row.reminderDoneButton = CreateFrame("Button", nil, row)
+    row.reminderDoneButton:RegisterForClicks("LeftButtonUp")
+    row.reminderDoneButton.text = row.reminderDoneButton:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    row.reminderDoneButton.text:SetAllPoints()
+    row.reminderDoneButton.text:SetJustifyH("LEFT")
+    row.reminderDoneButton:Hide()
+    row.reminderDoneButton:SetScript("OnEnter", function(buttonFrame)
+        if buttonFrame.text then
+            buttonFrame.text:SetTextColor(unpack(FLOAT_REMINDER_ACTION_HOVER_COLOR))
+        end
+    end)
+    row.reminderDoneButton:SetScript("OnLeave", function(buttonFrame)
+        if buttonFrame.text then
+            buttonFrame.text:SetTextColor(unpack(FLOAT_REMINDER_ACTION_COLOR))
+        end
+    end)
+    row.reminderDoneButton:SetScript("OnClick", function(buttonFrame)
+        if not buttonFrame.reminderBlockKey or not module.SetReminderBlockDone then
+            return
+        end
+
+        module:SetReminderBlockDone(buttonFrame.reminderBlockKey, buttonFrame.targetDone == true)
+    end)
+
+    row.reminderActionSeparator = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    row.reminderActionSeparator:Hide()
+
+    row.reminderOpenNoteButton = CreateFrame("Button", nil, row)
+    row.reminderOpenNoteButton:RegisterForClicks("LeftButtonUp")
+    row.reminderOpenNoteButton.text = row.reminderOpenNoteButton:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    row.reminderOpenNoteButton.text:SetAllPoints()
+    row.reminderOpenNoteButton.text:SetJustifyH("LEFT")
+    row.reminderOpenNoteButton:Hide()
+    row.reminderOpenNoteButton:SetScript("OnEnter", function(buttonFrame)
+        if buttonFrame.text then
+            buttonFrame.text:SetTextColor(unpack(FLOAT_REMINDER_ACTION_HOVER_COLOR))
+        end
+    end)
+    row.reminderOpenNoteButton:SetScript("OnLeave", function(buttonFrame)
+        if buttonFrame.text then
+            buttonFrame.text:SetTextColor(unpack(FLOAT_REMINDER_ACTION_COLOR))
+        end
+    end)
+    row.reminderOpenNoteButton:SetScript("OnClick", function(buttonFrame)
+        if not buttonFrame.noteId then
+            return
+        end
+
+        if module.OpenWindow then
+            module:OpenWindow()
+        end
+        if module.OpenNote then
+            module:OpenNote(buttonFrame.noteId, false, false)
         end
     end)
 
@@ -484,6 +549,12 @@ local function HideFloatLineRow(row)
     row.atlasTexture:Hide()
     row.markerButton.noteId = nil
     row.markerButton.sourceLineIndex = nil
+    row.reminderDoneButton.reminderBlockKey = nil
+    row.reminderDoneButton.targetDone = nil
+    row.reminderDoneButton:Hide()
+    row.reminderActionSeparator:Hide()
+    row.reminderOpenNoteButton.noteId = nil
+    row.reminderOpenNoteButton:Hide()
     row.noteId = nil
     row.markerButton:Hide()
     HideUnusedFloatChunks(row)
@@ -508,7 +579,7 @@ end
 
 local function RenderFloatInlineRow(view, row, entry, segments)
     local lineType = entry.lineType
-    local baseFontSize = GetFloatLineFontSize(lineType)
+    local baseFontSize = GetFloatLineFontSize(view, lineType)
     local leftInset = FLOAT_ROW_SIDE_PADDING
     local topInset = FLOAT_ROW_TOP_PADDING
     local bottomInset = FLOAT_ROW_BOTTOM_PADDING
@@ -519,13 +590,20 @@ local function RenderFloatInlineRow(view, row, entry, segments)
     local isTask = lineType == "taskUnchecked" or lineType == "taskChecked"
 
     row.markerButton:Hide()
+    row.reminderDoneButton:Hide()
+    row.reminderActionSeparator:Hide()
+    row.reminderOpenNoteButton:Hide()
     if IsFloatListLineType(lineType) and not entry.isCentered then
         markerText = module:ResolveReadListMarkerText(nil, lineType, entry.markerText or "•")
         row.markerText = markerText
-        module:ApplyReadViewFont(row.markerButton.text, GetFloatMarkerFontPath(lineType), FONT_REGULAR, GetFloatLineFontSize("plain"), "")
+        module:ApplyReadViewFont(row.markerButton.text, GetFloatMarkerFontPath(lineType), FONT_REGULAR, GetFloatLineFontSize(view, "plain"), "")
         row.markerButton.text:SetText(markerText or "")
-        row.markerButton.text:SetTextColor(unpack(GetFloatMarkerTextColor()))
-        markerWidth, markerHeight = MeasureFloatText(row, markerText or "", GetFloatMarkerFontPath(lineType), GetFloatLineFontSize("plain"))
+        if view and view.isReminderView and entry.reminderDone then
+            row.markerButton.text:SetTextColor(unpack(FLOAT_REMINDER_DONE_TEXT_COLOR))
+        else
+            row.markerButton.text:SetTextColor(unpack(GetFloatMarkerTextColor()))
+        end
+        markerWidth, markerHeight = MeasureFloatText(row, markerText or "", GetFloatMarkerFontPath(lineType), GetFloatLineFontSize(view, "plain"))
         row.markerButton:ClearAllPoints()
         row.markerButton:SetPoint("TOPLEFT", row, "TOPLEFT", leftInset, -topInset)
         row.markerButton:SetSize(math.max(markerWidth, 1), math.max(markerHeight, 1))
@@ -545,7 +623,7 @@ local function RenderFloatInlineRow(view, row, entry, segments)
         local segmentUnits = SplitFloatSegmentIntoUnits(segmentData)
         for _, unit in ipairs(segmentUnits) do
             local fontPath = GetFloatChunkFontPath(segmentData.style, lineType)
-            local fontSize = segmentData.style == "code" and GetFloatLineFontSize("code") or baseFontSize
+            local fontSize = segmentData.style == "code" and GetFloatLineFontSize(view, "code") or baseFontSize
             local unitWidth = 0
             local unitHeight = fontSize
             if not unit.isLineBreak then
@@ -652,10 +730,13 @@ local function RenderFloatInlineRow(view, row, entry, segments)
     row:SetHeight(row.contentHeight)
 end
 
-local function RenderFloatCodeRow(view, row, displayText)
+local function RenderFloatCodeRow(view, row, displayText, reminderDone)
     local chunk = GetOrCreateFloatChunk(row, 1)
     HideUnusedFloatChunks(row)
     row.markerButton:Hide()
+    row.reminderDoneButton:Hide()
+    row.reminderActionSeparator:Hide()
+    row.reminderOpenNoteButton:Hide()
     row.codeBackground:Show()
     row.codeBackground:ClearAllPoints()
     row.codeBackground:SetPoint("TOPLEFT", row, "TOPLEFT", FLOAT_ROW_SIDE_PADDING, -FLOAT_ROW_TOP_PADDING)
@@ -665,8 +746,12 @@ local function RenderFloatCodeRow(view, row, displayText)
     chunk:SetPoint("TOPLEFT", row, "TOPLEFT", FLOAT_ROW_SIDE_PADDING + FLOAT_CODE_BLOCK_PADDING_X, -(FLOAT_ROW_TOP_PADDING + FLOAT_CODE_BLOCK_PADDING_Y))
     chunk.text:ClearAllPoints()
     chunk.text:SetPoint("TOPLEFT", 0, 0)
-    module:ApplyReadViewFont(chunk.text, FONT_REGULAR, FONT_REGULAR, GetFloatLineFontSize("code"), "")
-    chunk.text:SetTextColor(unpack(FLOAT_CODE_TEXT_COLOR))
+    module:ApplyReadViewFont(chunk.text, reminderDone and (FONT_ITALIC or FONT_REGULAR) or FONT_REGULAR, FONT_REGULAR, GetFloatLineFontSize(view, "code"), "")
+    if reminderDone then
+        chunk.text:SetTextColor(unpack(FLOAT_REMINDER_DONE_TEXT_COLOR))
+    else
+        chunk.text:SetTextColor(unpack(FLOAT_CODE_TEXT_COLOR))
+    end
     if chunk.text.SetSpacing then
         chunk.text:SetSpacing(FLOAT_CODE_LINE_SPACING)
     end
@@ -679,7 +764,7 @@ local function RenderFloatCodeRow(view, row, displayText)
     chunk.background:Hide()
     chunk:EnableMouse(false)
     chunk:Show()
-    local textHeight = chunk.text:GetStringHeight() or GetFloatLineFontSize("code")
+    local textHeight = chunk.text:GetStringHeight() or GetFloatLineFontSize(view, "code")
     row.contentHeight = textHeight + (FLOAT_ROW_TOP_PADDING * 2) + (FLOAT_CODE_BLOCK_PADDING_Y * 2)
     row:SetHeight(math.max(row.contentHeight, 1))
     row.codeBackground:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -FLOAT_ROW_SIDE_PADDING, FLOAT_ROW_BOTTOM_PADDING)
@@ -688,6 +773,9 @@ end
 local function RenderFloatSeparatorRow(view, row)
     HideUnusedFloatChunks(row)
     row.markerButton:Hide()
+    row.reminderDoneButton:Hide()
+    row.reminderActionSeparator:Hide()
+    row.reminderOpenNoteButton:Hide()
     row.separator:ClearAllPoints()
     row.separator:SetPoint("LEFT", row, "LEFT", FLOAT_ROW_SIDE_PADDING + 6, 0)
     row.separator:SetPoint("RIGHT", row, "RIGHT", -(FLOAT_ROW_SIDE_PADDING + 6), 0)
@@ -699,12 +787,70 @@ end
 local function RenderFloatBlankRow(row)
     HideUnusedFloatChunks(row)
     row.markerButton:Hide()
+    row.reminderDoneButton:Hide()
+    row.reminderActionSeparator:Hide()
+    row.reminderOpenNoteButton:Hide()
     row:SetHeight(FLOAT_BLANK_LINE_HEIGHT)
+end
+
+local function RenderFloatReminderDoneActionRow(view, row, entry)
+    HideUnusedFloatChunks(row)
+    row.markerButton:Hide()
+    row.separator:Hide()
+    row.codeBackground:Hide()
+    row.atlasTexture:Hide()
+
+    local button = row.reminderDoneButton
+    local separator = row.reminderActionSeparator
+    local openButton = row.reminderOpenNoteButton
+    local label = tostring(entry.displayText or (entry.reminderDone and "Undo" or "Done"))
+    local openLabel = "Open Note"
+    local separatorLabel = "|"
+    local fontSize = GetFloatLineFontSize(view, "reminderNoteTitle")
+    module:ApplyReadViewFont(button.text, FONT_REGULAR, FONT_REGULAR, fontSize, "")
+    button.text:SetText(label)
+    button.text:SetTextColor(unpack(FLOAT_REMINDER_ACTION_COLOR))
+    button:ClearAllPoints()
+    button:SetPoint("TOPLEFT", row, "TOPLEFT", FLOAT_ROW_SIDE_PADDING, -FLOAT_ROW_TOP_PADDING)
+    module:ApplyReadViewFont(row.measure, FONT_REGULAR, FONT_REGULAR, fontSize, "")
+    row.measure:SetText(label)
+    local width = math.max(row.measure:GetStringWidth() or 0, 1)
+    local height = math.max(row.measure:GetStringHeight() or fontSize, fontSize)
+    button:SetSize(width + 4, height + 2)
+    button.reminderBlockKey = entry.reminderBlockKey
+    button.targetDone = not entry.reminderDone
+    button:EnableMouse(entry.reminderBlockKey ~= nil)
+    button:Show()
+
+    module:ApplyReadViewFont(separator, FONT_REGULAR, FONT_REGULAR, fontSize, "")
+    separator:SetText(separatorLabel)
+    separator:SetTextColor(0.52, 0.52, 0.52, 0.82)
+    separator:ClearAllPoints()
+    separator:SetPoint("LEFT", button, "RIGHT", 2, 0)
+    separator:Show()
+
+    module:ApplyReadViewFont(openButton.text, FONT_REGULAR, FONT_REGULAR, fontSize, "")
+    openButton.text:SetText(openLabel)
+    openButton.text:SetTextColor(unpack(FLOAT_REMINDER_ACTION_COLOR))
+    openButton:ClearAllPoints()
+    openButton:SetPoint("LEFT", separator, "RIGHT", 6, 0)
+    row.measure:SetText(openLabel)
+    local openWidth = math.max(row.measure:GetStringWidth() or 0, 1)
+    local openHeight = math.max(row.measure:GetStringHeight() or fontSize, fontSize)
+    openButton:SetSize(openWidth + 10, openHeight + 2)
+    openButton.noteId = entry.noteId
+    openButton:EnableMouse(entry.noteId ~= nil)
+    openButton:Show()
+
+    row:SetHeight(height + FLOAT_ROW_TOP_PADDING + FLOAT_ROW_BOTTOM_PADDING + 2)
 end
 
 local function RenderFloatAtlasRow(view, row, atlasData)
     HideUnusedFloatChunks(row)
     row.markerButton:Hide()
+    row.reminderDoneButton:Hide()
+    row.reminderActionSeparator:Hide()
+    row.reminderOpenNoteButton:Hide()
     row.atlasTexture:ClearAllPoints()
     local applied = row.atlasTexture:SetAtlas(atlasData.atlasName, true)
     if not applied then
@@ -825,6 +971,9 @@ function module:RefreshFloatReadView(view, bodyText, preserveScroll)
     local previousRow = nil
     local previousLineType = nil
     local showTextures = self:IsFloatTexturesEnabled()
+    if view.isReminderView and self.IsReminderTexturesEnabled then
+        showTextures = self:IsReminderTexturesEnabled()
+    end
     local contentHeight = 0
 
     for _, entry in ipairs(entries or {}) do
@@ -840,6 +989,9 @@ function module:RefreshFloatReadView(view, bodyText, preserveScroll)
             row.separator:Hide()
             row.codeBackground:Hide()
             row.atlasTexture:Hide()
+            row.reminderDoneButton:Hide()
+            row.reminderActionSeparator:Hide()
+            row.reminderOpenNoteButton:Hide()
 
             if entry.lineType == "blank" then
                 RenderFloatBlankRow(row)
@@ -851,7 +1003,10 @@ function module:RefreshFloatReadView(view, bodyText, preserveScroll)
                 RenderFloatAtlasRow(view, row, entry.displayText or {})
                 row.inlineSegments = nil
             elseif entry.lineType == "code" then
-                RenderFloatCodeRow(view, row, entry.displayText or "")
+                RenderFloatCodeRow(view, row, entry.displayText or "", view.isReminderView and entry.reminderDone)
+                row.inlineSegments = nil
+            elseif entry.lineType == "reminderDoneAction" then
+                RenderFloatReminderDoneActionRow(view, row, entry)
                 row.inlineSegments = nil
             else
                 local isCenteredList = IsFloatListLineType(entry.lineType) and entry.isCentered or false
@@ -864,6 +1019,14 @@ function module:RefreshFloatReadView(view, bodyText, preserveScroll)
                     entry.markerText,
                     isCenteredList
                 )
+                if view.isReminderView and entry.reminderDone then
+                    for _, segmentData in ipairs(resolvedSegments or {}) do
+                        segmentData.reminderDone = true
+                        if segmentData.style ~= "code" then
+                            segmentData.style = "italic"
+                        end
+                    end
+                end
                 RenderFloatInlineRow(view, row, entry, resolvedSegments)
                 hasPendingReadItemInfo = hasPendingReadItemInfo or rowHasPending
             end
