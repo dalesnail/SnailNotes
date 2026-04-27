@@ -362,7 +362,7 @@ When logging in
 
 `[! zone:<zone-name>]`  
 
-When entering a zone or area (use this for specific instances)
+When entering a zone or area (use this for specific instances and open world areas)
 
 `[! dungeon]`  
 

@@ -50,8 +50,50 @@ local READ_INLINE_CODE_PADDING_Y = 2
 local READ_CODE_LINE_SPACING = 2
 local READ_CODE_BLOCK_PADDING_X = 8
 local READ_CODE_BLOCK_PADDING_Y = 6
+local READ_LINK_HOVER_BRIGHTEN = 0.70
 local function IsReadListLineType(lineType)
     return lineType == "bullet" or lineType == "numbered" or lineType == "taskUnchecked" or lineType == "taskChecked"
+end
+
+local function GetBrightenedReadColor(color)
+    local red = math.min((color and color[1] or 1) + ((1 - (color and color[1] or 1)) * READ_LINK_HOVER_BRIGHTEN), 1)
+    local green = math.min((color and color[2] or 1) + ((1 - (color and color[2] or 1)) * READ_LINK_HOVER_BRIGHTEN), 1)
+    local blue = math.min((color and color[3] or 1) + ((1 - (color and color[3] or 1)) * READ_LINK_HOVER_BRIGHTEN), 1)
+    return red, green, blue, color and color[4] or 1
+end
+
+local function RestoreReadLinkTextColor(region)
+    local hoverGroup = region and region.hoverGroup or nil
+    if hoverGroup and hoverGroup.textWidgets and hoverGroup.baseColor then
+        local baseColor = hoverGroup.baseColor
+        for _, textWidget in ipairs(hoverGroup.textWidgets) do
+            textWidget:SetTextColor(baseColor[1] or 1, baseColor[2] or 1, baseColor[3] or 1, baseColor[4] or 1)
+        end
+        return
+    end
+
+    local textWidget = region and region.hoverTextWidget or nil
+    local baseColor = region and region.hoverBaseColor or nil
+    if textWidget and baseColor then
+        textWidget:SetTextColor(baseColor[1] or 1, baseColor[2] or 1, baseColor[3] or 1, baseColor[4] or 1)
+    end
+end
+
+local function ApplyReadLinkHoverColor(region)
+    local hoverGroup = region and region.hoverGroup or nil
+    if hoverGroup and hoverGroup.textWidgets and hoverGroup.baseColor then
+        local red, green, blue, alpha = GetBrightenedReadColor(hoverGroup.baseColor)
+        for _, textWidget in ipairs(hoverGroup.textWidgets) do
+            textWidget:SetTextColor(red, green, blue, alpha)
+        end
+        return
+    end
+
+    local textWidget = region and region.hoverTextWidget or nil
+    local baseColor = region and region.hoverBaseColor or nil
+    if textWidget and baseColor then
+        textWidget:SetTextColor(GetBrightenedReadColor(baseColor))
+    end
 end
 
 local function GetReadTaskMarkerGlyph(lineType)
@@ -1088,10 +1130,7 @@ function module:GetOrCreateReadInteractiveRegion(row, index)
                 return
             end
 
-            GameTooltip:SetOwner(selfRegion, "ANCHOR_RIGHT")
-            GameTooltip:SetText(segmentData.linkText or segmentData.text or "", 0.45, 0.82, 1.0)
-            GameTooltip:AddLine("Jump to section", 0.92, 0.88, 0.80, true)
-            GameTooltip:Show()
+            ApplyReadLinkHoverColor(selfRegion)
             return
         end
 
@@ -1100,14 +1139,7 @@ function module:GetOrCreateReadInteractiveRegion(row, index)
                 return
             end
 
-            local targetNote = segmentData.targetNote
-            GameTooltip:SetOwner(selfRegion, "ANCHOR_RIGHT")
-            GameTooltip:SetText(segmentData.linkText or segmentData.text or "", 0.45, 0.82, 1.0)
-            if targetNote and targetNote.title and targetNote.title ~= "" then
-                GameTooltip:AddLine(targetNote.title, 0.92, 0.88, 0.80, true)
-            end
-            GameTooltip:AddLine("Open note", 0.92, 0.88, 0.80, true)
-            GameTooltip:Show()
+            ApplyReadLinkHoverColor(selfRegion)
             return
         end
 
@@ -1120,7 +1152,8 @@ function module:GetOrCreateReadInteractiveRegion(row, index)
         end
         GameTooltip:Show()
     end)
-    region:SetScript("OnLeave", function()
+    region:SetScript("OnLeave", function(selfRegion)
+        RestoreReadLinkTextColor(selfRegion)
         GameTooltip:Hide()
     end)
     region:SetScript("OnClick", function(selfRegion, button)
@@ -1170,7 +1203,11 @@ function module:HideReadInteractiveRegions(row)
     end
 
     for _, region in ipairs(row.hoverRegions) do
+        RestoreReadLinkTextColor(region)
         region.segmentData = nil
+        region.hoverTextWidget = nil
+        region.hoverBaseColor = nil
+        region.hoverGroup = nil
         region:Hide()
     end
 end
@@ -1229,6 +1266,9 @@ function module:RefreshReadInteractiveRegions(row, resolvedFontPath, fallbackFon
                 hoverIndex = hoverIndex + 1
                 local region = self:GetOrCreateReadInteractiveRegion(row, hoverIndex)
                 region.segmentData = segmentData
+                region.hoverTextWidget = nil
+                region.hoverBaseColor = nil
+                region.hoverGroup = nil
                 region:ClearAllPoints()
                 region:SetPoint("TOPLEFT", row.text, "TOPLEFT", centeredOffset + prefixWidth, 0)
                 region:SetSize(segmentWidth, math.max(textHeight, lineHeight))
@@ -1541,6 +1581,7 @@ function module:RenderStyledReadSegments(row, lineType, segments, markerText, fa
 
     local textIndex = 0
     local hoverIndex = 0
+    local hoverGroupsBySegment = {}
     local yOffset = bodyInnerY
 
     for _, lineData in ipairs(lines) do
@@ -1594,6 +1635,31 @@ function module:RenderStyledReadSegments(row, lineType, segments, markerText, fa
                     hoverIndex = hoverIndex + 1
                     local region = self:GetOrCreateReadInteractiveRegion(row, hoverIndex)
                     region.segmentData = chunkData.segmentData
+                    if chunkData.segmentData.kind == "anchorLink" or chunkData.segmentData.kind == "noteLink" then
+                        local baseColor = chunkData.segmentData.textColor or { 1, 1, 1 }
+                        local hoverGroup = hoverGroupsBySegment[chunkData.segmentData]
+                        if not hoverGroup then
+                            hoverGroup = {
+                                baseColor = {
+                                    baseColor[1] or 1,
+                                    baseColor[2] or 1,
+                                    baseColor[3] or 1,
+                                    baseColor[4] or 1,
+                                },
+                                textWidgets = {},
+                            }
+                            hoverGroupsBySegment[chunkData.segmentData] = hoverGroup
+                        end
+                        hoverGroup.textWidgets[#hoverGroup.textWidgets + 1] = textWidget
+                        region.hoverTextWidget = nil
+                        region.hoverBaseColor = nil
+                        region.hoverGroup = hoverGroup
+                        RestoreReadLinkTextColor(region)
+                    else
+                        region.hoverTextWidget = nil
+                        region.hoverBaseColor = nil
+                        region.hoverGroup = nil
+                    end
                     region:ClearAllPoints()
                     region:SetPoint("TOPLEFT", hoverAnchorRegion, "TOPLEFT", 0, 0)
                     region:SetSize(actualChunkWidth, math.max(lineData.height, actualChunkHeight))
@@ -1893,6 +1959,31 @@ function module:ApplyPendingNoteReadViewScrollRestore(view)
     return true
 end
 
+function module:ClampCurrentNoteReadViewScroll(view)
+    if not view or not view.bodyScrollFrame then
+        return
+    end
+
+    local scrollFrame = view.bodyScrollFrame
+    if scrollFrame.UpdateScrollChildRect then
+        scrollFrame:UpdateScrollChildRect()
+    end
+
+    local currentScrollOffset = scrollFrame:GetVerticalScroll() or 0
+    local clampedScrollOffset, maxScroll = self:ClampReadViewScrollOffset(view, currentScrollOffset)
+    if math.abs(currentScrollOffset - clampedScrollOffset) > 0.01 or maxScroll <= 0 then
+        scrollFrame:SetVerticalScroll(clampedScrollOffset)
+    end
+
+    local scrollBar = view.bodyScrollBar
+    if scrollBar and scrollBar.SetMinMaxValues then
+        scrollBar:SetMinMaxValues(0, maxScroll)
+    end
+    if scrollBar and scrollBar.SetValue then
+        scrollBar:SetValue(clampedScrollOffset)
+    end
+end
+
 function module:GetReadViewLineRowHeight(row)
     if not row then
         return 1
@@ -1977,6 +2068,9 @@ function module:RefreshNoteReadLineRows(view, bodyText)
     for index = renderedLineCount + 1, #(view.bodyLines or {}) do
         local row = view.bodyLines[index]
         if row then
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", contentParent, "TOPLEFT", 0, 0)
+            row:SetSize(1, 1)
             self:HideReadInteractiveRegions(row)
             self:HideReadSegmentBackgrounds(row)
             self:HideReadSegmentTexts(row)
@@ -2011,6 +2105,7 @@ function module:RefreshNoteReadLineRows(view, bodyText)
 
     view.hasPendingReadItemInfo = hasUnresolvedItemTokens
     view.pendingReadItemIds = pendingItemIds
+    view.renderedReadLineCount = renderedLineCount
     return hasUnresolvedItemTokens
 end
 
@@ -2100,7 +2195,12 @@ function module:UpdateStandaloneReadViewLayout(view)
     view.bodyContent:SetWidth(self:GetReadViewLayoutWidth(view, reserveScrollbar))
     self:RefreshNoteReadLineRowHeights(view)
     view.bodyContent:SetHeight(self:GetNoteReadBodyContentHeight(view))
-    self:ApplyPendingNoteReadViewScrollRestore(view)
+    if view.bodyScrollFrame.UpdateScrollChildRect then
+        view.bodyScrollFrame:UpdateScrollChildRect()
+    end
+    if not self:ApplyPendingNoteReadViewScrollRestore(view) then
+        self:ClampCurrentNoteReadViewScroll(view)
+    end
 end
 
 function module:RefreshNoteReadView(tab, preserveScroll)

@@ -7,27 +7,29 @@ local helpers = shared.helpers
 local NormalizeNoteTitle = helpers.NormalizeNoteTitle
 local ClampImportTimestamp = helpers.ClampImportTimestamp
 local GetPrintableErrorMessage = helpers.GetPrintableErrorMessage
-local CreateBackdropFrame = helpers.CreateBackdropFrame
 local DEFAULT_NOTE_TITLE = constants.DEFAULT_NOTE_TITLE
 local DEFAULT_NOTE_BODY = constants.DEFAULT_NOTE_BODY
 local NOTE_EXPORT_PREFIX = constants.NOTE_EXPORT_PREFIX
 local NOTE_EXPORT_VERSION = constants.NOTE_EXPORT_VERSION
-local NOTE_TRANSFER_DIALOG_WIDTH = constants.NOTE_TRANSFER_DIALOG_WIDTH
-local NOTE_TRANSFER_DIALOG_HEIGHT = constants.NOTE_TRANSFER_DIALOG_HEIGHT
 local NOTE_TRANSFER_DIALOG_BUTTON_WIDTH = constants.NOTE_TRANSFER_DIALOG_BUTTON_WIDTH
 local NOTE_TRANSFER_DIALOG_BUTTON_HEIGHT = constants.NOTE_TRANSFER_DIALOG_BUTTON_HEIGHT
-local NOTE_TRANSFER_DIALOG_SIDE_INSET = constants.NOTE_TRANSFER_DIALOG_SIDE_INSET
-local NOTE_TRANSFER_DIALOG_TOP_INSET = constants.NOTE_TRANSFER_DIALOG_TOP_INSET
-local NOTE_TRANSFER_DIALOG_BOTTOM_INSET = constants.NOTE_TRANSFER_DIALOG_BOTTOM_INSET
-local NOTE_TRANSFER_DIALOG_INSTRUCTIONS_TOP_GAP = constants.NOTE_TRANSFER_DIALOG_INSTRUCTIONS_TOP_GAP
-local NOTE_TRANSFER_DIALOG_BODY_TOP_GAP = constants.NOTE_TRANSFER_DIALOG_BODY_TOP_GAP
 local NOTE_TRANSFER_DIALOG_STATUS_TOP_GAP = constants.NOTE_TRANSFER_DIALOG_STATUS_TOP_GAP
-local NOTE_TRANSFER_DIALOG_BUTTON_TOP_GAP = constants.NOTE_TRANSFER_DIALOG_BUTTON_TOP_GAP
-local NOTE_TRANSFER_DIALOG_EDIT_INNER_X = constants.NOTE_TRANSFER_DIALOG_EDIT_INNER_X
-local NOTE_TRANSFER_DIALOG_EDIT_INNER_Y = constants.NOTE_TRANSFER_DIALOG_EDIT_INNER_Y
-local HOME_LIST_BORDER_COLOR = constants.HOME_LIST_BORDER_COLOR
-local HOME_LIST_BACKDROP_BORDER_MARGIN = constants.HOME_LIST_BACKDROP_BORDER_MARGIN
 local NOTE_TAB_BODY_EDIT_FONT_SIZE = constants.NOTE_TAB_BODY_EDIT_FONT_SIZE
+local TRANSFER_DIALOG_PADDING = 10
+local TRANSFER_DIALOG_GAP = 8
+local TRANSFER_DIALOG_MIN_WIDTH = 240
+local TRANSFER_DIALOG_MAX_WIDTH = 520
+local TRANSFER_DIALOG_COPY_MIN_WIDTH = 260
+local TRANSFER_DIALOG_COPY_BODY_HEIGHT = 34
+local TRANSFER_DIALOG_TEXT_BODY_MIN_HEIGHT = 96
+local TRANSFER_DIALOG_TEXT_BODY_MAX_HEIGHT = 180
+local TRANSFER_DIALOG_STATUS_HEIGHT = 16
+local TRANSFER_DIALOG_SCROLLBAR_WIDTH = 22
+local TRANSFER_DIALOG_EDIT_INSET_X = 5
+local TRANSFER_DIALOG_EDIT_INSET_Y = 4
+local TRANSFER_DIALOG_BACKGROUND_COLOR = { 0.01, 0.01, 0.01, 0.94 }
+local TRANSFER_DIALOG_BODY_BACKGROUND_COLOR = { 0, 0, 0, 0.80 }
+local TRANSFER_DIALOG_BORDER_COLOR = { 0.20, 0.20, 0.20, 0.85 }
 local function NextNoteBodyScrollFrameSerial()
     return shared.NextNoteBodyScrollFrameSerial()
 end
@@ -241,45 +243,121 @@ function module:SetNoteTransferDialogStatus(dialog, text, isError)
     else
         dialog.statusText:SetTextColor(0.80, 0.88, 0.98)
     end
+    if dialog.mode and dialog.editBox and dialog.primaryButton then
+        self:ApplyNoteTransferDialogLayout(dialog, dialog.mode, dialog.editBox:GetText())
+    end
+end
+
+local function ClampTransferDialogValue(value, minValue, maxValue)
+    value = tonumber(value) or minValue
+    return math.max(minValue, math.min(math.floor(value + 0.5), maxValue))
+end
+
+local function GetTransferDialogMaxWidth(dialog)
+    local parent = dialog and dialog:GetParent() or nil
+    local parentWidth = parent and parent:GetWidth() or TRANSFER_DIALOG_MAX_WIDTH
+    return math.min(TRANSFER_DIALOG_MAX_WIDTH, math.max(TRANSFER_DIALOG_MIN_WIDTH, parentWidth - 32))
+end
+
+function module:ApplyNoteTransferDialogLayout(dialog, mode, text)
+    if not dialog then
+        return
+    end
+
+    text = tostring(text or "")
+    local maxWidth = GetTransferDialogMaxWidth(dialog)
+    local measuredWidth = 0
+    if dialog.measureText then
+        dialog.measureText:SetText(text)
+        measuredWidth = dialog.measureText:GetStringWidth() or 0
+    end
+
+    local isCopyMode = mode == "noteLink"
+    local scrollbarWidth = isCopyMode and 0 or TRANSFER_DIALOG_SCROLLBAR_WIDTH
+    local minWidth = isCopyMode and TRANSFER_DIALOG_COPY_MIN_WIDTH or 340
+    local bodyWidth = ClampTransferDialogValue(measuredWidth + (TRANSFER_DIALOG_EDIT_INSET_X * 2) + scrollbarWidth + 6, minWidth - (TRANSFER_DIALOG_PADDING * 2), maxWidth - (TRANSFER_DIALOG_PADDING * 2))
+    local bodyHeight = TRANSFER_DIALOG_COPY_BODY_HEIGHT
+    if not isCopyMode then
+        local _, newlineCount = string.gsub(text, "\n", "")
+        local estimatedRows = math.max(newlineCount + 1, math.ceil(math.max(string.len(text), 1) / math.max(math.floor(bodyWidth / 8), 1)))
+        bodyHeight = ClampTransferDialogValue(estimatedRows * (NOTE_TAB_BODY_EDIT_FONT_SIZE + 4) + (TRANSFER_DIALOG_EDIT_INSET_Y * 2), TRANSFER_DIALOG_TEXT_BODY_MIN_HEIGHT, TRANSFER_DIALOG_TEXT_BODY_MAX_HEIGHT)
+    end
+
+    local hasSecondaryButton = dialog.secondaryButton and dialog.secondaryButton:IsShown()
+    local buttonRowWidth = NOTE_TRANSFER_DIALOG_BUTTON_WIDTH
+    if hasSecondaryButton then
+        buttonRowWidth = (NOTE_TRANSFER_DIALOG_BUTTON_WIDTH * 2) + 4
+    end
+
+    local dialogWidth = math.max(bodyWidth + (TRANSFER_DIALOG_PADDING * 2), buttonRowWidth + (TRANSFER_DIALOG_PADDING * 2))
+    local statusHeight = dialog.statusText and dialog.statusText:GetText() ~= "" and TRANSFER_DIALOG_STATUS_HEIGHT or 0
+    local dialogHeight = TRANSFER_DIALOG_PADDING + bodyHeight + TRANSFER_DIALOG_GAP + statusHeight + NOTE_TRANSFER_DIALOG_BUTTON_HEIGHT + TRANSFER_DIALOG_PADDING
+
+    dialog:SetSize(dialogWidth, dialogHeight)
+
+    dialog.bodyFrame:ClearAllPoints()
+    dialog.bodyFrame:SetPoint("TOPLEFT", dialog, "TOPLEFT", TRANSFER_DIALOG_PADDING, -TRANSFER_DIALOG_PADDING)
+    dialog.bodyFrame:SetSize(dialogWidth - (TRANSFER_DIALOG_PADDING * 2), bodyHeight)
+
+    dialog.scrollFrame:ClearAllPoints()
+    dialog.scrollFrame:SetPoint("TOPLEFT", dialog.bodyFrame, "TOPLEFT", 4, -4)
+    dialog.scrollFrame:SetPoint("BOTTOMRIGHT", dialog.bodyFrame, "BOTTOMRIGHT", -(scrollbarWidth + 4), 4)
+
+    dialog.editBox:SetWidth(math.max(bodyWidth - scrollbarWidth - 10, 1))
+    dialog.editBox:SetHeight(math.max(bodyHeight - 8, TRANSFER_DIALOG_COPY_BODY_HEIGHT - 8))
+    if dialog.scrollBar then
+        dialog.scrollBar:SetShown(not isCopyMode)
+    end
+
+    dialog.statusText:ClearAllPoints()
+    dialog.statusText:SetPoint("TOPLEFT", dialog.bodyFrame, "BOTTOMLEFT", 2, -NOTE_TRANSFER_DIALOG_STATUS_TOP_GAP)
+    dialog.statusText:SetPoint("TOPRIGHT", dialog.bodyFrame, "BOTTOMRIGHT", -2, -NOTE_TRANSFER_DIALOG_STATUS_TOP_GAP)
+
+    dialog.primaryButton:ClearAllPoints()
+    if hasSecondaryButton then
+        dialog.secondaryButton:ClearAllPoints()
+        dialog.secondaryButton:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -TRANSFER_DIALOG_PADDING, TRANSFER_DIALOG_PADDING)
+        dialog.primaryButton:SetPoint("RIGHT", dialog.secondaryButton, "LEFT", -4, 0)
+    else
+        dialog.primaryButton:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -TRANSFER_DIALOG_PADDING, TRANSFER_DIALOG_PADDING)
+    end
 end
 
 function module:CreateNoteTransferDialog(parent)
-    local dialog = CreateFrame("Frame", nil, parent, "BasicFrameTemplateWithInset")
+    local dialog = CreateFrame("Frame", nil, parent, BackdropTemplateMixin and "BackdropTemplate" or nil)
     dialog:SetFrameStrata("DIALOG")
     dialog:SetFrameLevel((parent:GetFrameLevel() or 1) + 60)
-    dialog:SetSize(NOTE_TRANSFER_DIALOG_WIDTH, NOTE_TRANSFER_DIALOG_HEIGHT)
+    dialog:SetSize(TRANSFER_DIALOG_COPY_MIN_WIDTH, 96)
     dialog:SetPoint("CENTER", parent, "CENTER", 0, 0)
     dialog:Hide()
-
-    if dialog.TitleText then
-        dialog.TitleText:SetText("Note Transfer")
+    if dialog.SetBackdrop then
+        dialog:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1,
+        })
+        dialog:SetBackdropColor(unpack(TRANSFER_DIALOG_BACKGROUND_COLOR))
+        dialog:SetBackdropBorderColor(unpack(TRANSFER_DIALOG_BORDER_COLOR))
     end
 
-    dialog.instructions = dialog:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    dialog.instructions:SetPoint("TOPLEFT", NOTE_TRANSFER_DIALOG_SIDE_INSET, -NOTE_TRANSFER_DIALOG_TOP_INSET - NOTE_TRANSFER_DIALOG_INSTRUCTIONS_TOP_GAP)
-    dialog.instructions:SetPoint("TOPRIGHT", -NOTE_TRANSFER_DIALOG_SIDE_INSET, -NOTE_TRANSFER_DIALOG_TOP_INSET - NOTE_TRANSFER_DIALOG_INSTRUCTIONS_TOP_GAP)
-    dialog.instructions:SetJustifyH("LEFT")
-    dialog.instructions:SetJustifyV("TOP")
+    dialog.measureText = dialog:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    dialog.measureText:Hide()
 
-    dialog.bodyFrame = CreateBackdropFrame(dialog, false)
-    dialog.bodyFrame:SetPoint("TOPLEFT", dialog.instructions, "BOTTOMLEFT", 0, -NOTE_TRANSFER_DIALOG_BODY_TOP_GAP)
-    dialog.bodyFrame:SetPoint("TOPRIGHT", dialog.instructions, "BOTTOMRIGHT", 0, -NOTE_TRANSFER_DIALOG_BODY_TOP_GAP)
-    dialog.bodyFrame:SetPoint("BOTTOMRIGHT", -NOTE_TRANSFER_DIALOG_SIDE_INSET, NOTE_TRANSFER_DIALOG_BOTTOM_INSET + NOTE_TRANSFER_DIALOG_BUTTON_HEIGHT + NOTE_TRANSFER_DIALOG_BUTTON_TOP_GAP + 24)
-    if dialog.bodyFrame.SetBackdropBorderColor then
-        dialog.bodyFrame:SetBackdropBorderColor(unpack(HOME_LIST_BORDER_COLOR))
+    dialog.bodyFrame = CreateFrame("Frame", nil, dialog, BackdropTemplateMixin and "BackdropTemplate" or nil)
+    if dialog.bodyFrame.SetBackdrop then
+        dialog.bodyFrame:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1,
+        })
+        dialog.bodyFrame:SetBackdropColor(unpack(TRANSFER_DIALOG_BODY_BACKGROUND_COLOR))
+        dialog.bodyFrame:SetBackdropBorderColor(unpack(TRANSFER_DIALOG_BORDER_COLOR))
     end
-
-    dialog.bodyBackground = dialog.bodyFrame:CreateTexture(nil, "BACKGROUND")
-    dialog.bodyBackground:SetPoint("TOPLEFT", HOME_LIST_BACKDROP_BORDER_MARGIN, -HOME_LIST_BACKDROP_BORDER_MARGIN)
-    dialog.bodyBackground:SetPoint("BOTTOMRIGHT", -HOME_LIST_BACKDROP_BORDER_MARGIN, HOME_LIST_BACKDROP_BORDER_MARGIN)
-    dialog.bodyBackground:SetTexture("Interface\\Buttons\\WHITE8x8")
-    dialog.bodyBackground:SetVertexColor(0.02, 0.02, 0.02, 0.82)
 
     local scrollFrameSerial = NextNoteBodyScrollFrameSerial()
     dialog.scrollFrameName = "SnailNotesTransferScrollFrame" .. tostring(scrollFrameSerial)
     dialog.scrollFrame = CreateFrame("ScrollFrame", dialog.scrollFrameName, dialog.bodyFrame, "UIPanelScrollFrameTemplate")
-    dialog.scrollFrame:SetPoint("TOPLEFT", 6, -6)
-    dialog.scrollFrame:SetPoint("BOTTOMRIGHT", -28, 6)
+    dialog.scrollBar = _G[dialog.scrollFrameName .. "ScrollBar"]
 
     dialog.editBox = CreateFrame("EditBox", nil, dialog.scrollFrame)
     dialog.editBox:SetAutoFocus(false)
@@ -288,13 +366,13 @@ function module:CreateNoteTransferDialog(parent)
     do
         local fontPath, _, fontFlags = ChatFontNormal:GetFont()
         dialog.editBox:SetFont(fontPath or STANDARD_TEXT_FONT, NOTE_TAB_BODY_EDIT_FONT_SIZE, fontFlags)
+        dialog.measureText:SetFont(fontPath or STANDARD_TEXT_FONT, NOTE_TAB_BODY_EDIT_FONT_SIZE, fontFlags)
     end
-    dialog.editBox:SetTextInsets(NOTE_TRANSFER_DIALOG_EDIT_INNER_X, NOTE_TRANSFER_DIALOG_EDIT_INNER_X, NOTE_TRANSFER_DIALOG_EDIT_INNER_Y, NOTE_TRANSFER_DIALOG_EDIT_INNER_Y)
+    dialog.editBox:SetTextInsets(TRANSFER_DIALOG_EDIT_INSET_X, TRANSFER_DIALOG_EDIT_INSET_X, TRANSFER_DIALOG_EDIT_INSET_Y, TRANSFER_DIALOG_EDIT_INSET_Y)
     dialog.editBox:SetJustifyH("LEFT")
     dialog.editBox:SetJustifyV("TOP")
     dialog.editBox:EnableMouse(true)
     dialog.editBox:SetBlinkSpeed(0.5)
-    dialog.editBox:SetWidth(NOTE_TRANSFER_DIALOG_WIDTH - 72)
     dialog.editBox:SetPoint("TOPLEFT", dialog.scrollFrame, "TOPLEFT", 0, 0)
     if dialog.editBox.SetCountInvisibleLetters then
         dialog.editBox:SetCountInvisibleLetters(false)
@@ -304,14 +382,11 @@ function module:CreateNoteTransferDialog(parent)
     dialog.scrollFrame:EnableMouse(true)
 
     dialog.statusText = dialog:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-    dialog.statusText:SetPoint("TOPLEFT", dialog.bodyFrame, "BOTTOMLEFT", 2, -NOTE_TRANSFER_DIALOG_STATUS_TOP_GAP)
-    dialog.statusText:SetPoint("TOPRIGHT", dialog.bodyFrame, "BOTTOMRIGHT", -2, -NOTE_TRANSFER_DIALOG_STATUS_TOP_GAP)
     dialog.statusText:SetJustifyH("LEFT")
     dialog.statusText:SetJustifyV("TOP")
 
     dialog.secondaryButton = CreateFrame("Button", nil, dialog, "UIPanelButtonTemplate")
     dialog.secondaryButton:SetSize(NOTE_TRANSFER_DIALOG_BUTTON_WIDTH, NOTE_TRANSFER_DIALOG_BUTTON_HEIGHT)
-    dialog.secondaryButton:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -(NOTE_TRANSFER_DIALOG_SIDE_INSET + NOTE_TRANSFER_DIALOG_BUTTON_WIDTH + 4), NOTE_TRANSFER_DIALOG_BOTTOM_INSET)
     dialog.secondaryButton:SetText(CANCEL)
     dialog.secondaryButton:SetScript("OnClick", function()
         dialog:Hide()
@@ -319,13 +394,6 @@ function module:CreateNoteTransferDialog(parent)
 
     dialog.primaryButton = CreateFrame("Button", nil, dialog, "UIPanelButtonTemplate")
     dialog.primaryButton:SetSize(NOTE_TRANSFER_DIALOG_BUTTON_WIDTH, NOTE_TRANSFER_DIALOG_BUTTON_HEIGHT)
-    dialog.primaryButton:SetPoint("RIGHT", dialog.secondaryButton, "LEFT", -4, 0)
-
-    if dialog.CloseButton then
-        dialog.CloseButton:SetScript("OnClick", function()
-            dialog:Hide()
-        end)
-    end
 
     dialog.editBox:SetScript("OnEscapePressed", function()
         dialog:Hide()
@@ -342,6 +410,7 @@ function module:CreateNoteTransferDialog(parent)
         end
         if dialog.mode == "import" and dialog.statusText and dialog.statusText:GetText() ~= "" then
             module:SetNoteTransferDialogStatus(dialog, "")
+            module:ApplyNoteTransferDialogLayout(dialog, dialog.mode, editBox:GetText())
         end
     end)
     dialog:SetScript("OnHide", function()
@@ -350,6 +419,7 @@ function module:CreateNoteTransferDialog(parent)
         module:SetNoteTransferDialogStatus(dialog, "")
     end)
 
+    self:ApplyNoteTransferDialogLayout(dialog, "noteLink", "")
     return dialog
 end
 
@@ -382,20 +452,15 @@ function module:ShowNoteExportDialog(noteId)
     dialog.mode = "export"
     dialog.noteId = noteId
     dialog:SetFrameLevel((self.runtime.frame:GetFrameLevel() or 1) + 60)
-    if dialog.TitleText then
-        dialog.TitleText:SetText("Export Note")
-    end
-    dialog.instructions:SetText("Copy this note export string. It contains the saved title, body, and timestamps for this note.")
     dialog.primaryButton:SetText(CLOSE)
-    dialog.primaryButton:ClearAllPoints()
-    dialog.primaryButton:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -NOTE_TRANSFER_DIALOG_SIDE_INSET, NOTE_TRANSFER_DIALOG_BOTTOM_INSET)
     dialog.primaryButton:SetScript("OnClick", function()
         dialog:Hide()
     end)
     dialog.secondaryButton:Hide()
     self:SetNoteTransferDialogStatus(dialog, "")
-    dialog:Show()
     dialog.editBox:SetText(exportString)
+    self:ApplyNoteTransferDialogLayout(dialog, dialog.mode, exportString)
+    dialog:Show()
     dialog.editBox:SetFocus()
     if dialog.editBox.HighlightText then
         dialog.editBox:HighlightText()
@@ -423,20 +488,15 @@ function module:ShowNoteLinkDialog(noteId, titleOverride)
     dialog.mode = "noteLink"
     dialog.noteId = noteId
     dialog:SetFrameLevel((self.runtime.frame:GetFrameLevel() or 1) + 60)
-    if dialog.TitleText then
-        dialog.TitleText:SetText("Copy Note Link")
-    end
-    dialog.instructions:SetText("Copy this note link. It is ready to paste directly into another note.")
     dialog.primaryButton:SetText(CLOSE)
-    dialog.primaryButton:ClearAllPoints()
-    dialog.primaryButton:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -NOTE_TRANSFER_DIALOG_SIDE_INSET, NOTE_TRANSFER_DIALOG_BOTTOM_INSET)
     dialog.primaryButton:SetScript("OnClick", function()
         dialog:Hide()
     end)
     dialog.secondaryButton:Hide()
     self:SetNoteTransferDialogStatus(dialog, "")
-    dialog:Show()
     dialog.editBox:SetText(noteLink)
+    self:ApplyNoteTransferDialogLayout(dialog, dialog.mode, noteLink)
+    dialog:Show()
     dialog.editBox:SetFocus()
     if dialog.editBox.HighlightText then
         dialog.editBox:HighlightText()
@@ -459,13 +519,7 @@ function module:ShowNoteImportDialog()
     dialog.mode = "import"
     dialog.noteId = nil
     dialog:SetFrameLevel((self.runtime.frame:GetFrameLevel() or 1) + 60)
-    if dialog.TitleText then
-        dialog.TitleText:SetText("Import Note")
-    end
-    dialog.instructions:SetText("Paste a SnailNotes note export string to create a new local note.")
     dialog.primaryButton:SetText("Import")
-    dialog.primaryButton:ClearAllPoints()
-    dialog.primaryButton:SetPoint("RIGHT", dialog.secondaryButton, "LEFT", -4, 0)
     dialog.primaryButton:SetScript("OnClick", function()
         local importedNote, err = module:ParseImportedNoteString(dialog.editBox:GetText())
         if not importedNote then
@@ -486,8 +540,9 @@ function module:ShowNoteImportDialog()
     dialog.secondaryButton:Show()
     dialog.secondaryButton:SetText(CANCEL)
     self:SetNoteTransferDialogStatus(dialog, "")
-    dialog:Show()
     dialog.editBox:SetText("")
+    self:ApplyNoteTransferDialogLayout(dialog, dialog.mode, "")
+    dialog:Show()
     dialog.editBox:SetFocus()
     dialog.editBox:SetCursorPosition(0)
 

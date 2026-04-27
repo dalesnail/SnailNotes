@@ -59,6 +59,7 @@ local FLOAT_SETTINGS_TEXT_HOVER = { 1.0, 1.0, 1.0, 1.0 }
 local FLOAT_REMINDER_DONE_TEXT_COLOR = { 0.55, 0.55, 0.55 }
 local FLOAT_REMINDER_ACTION_COLOR = { 0.42, 0.58, 0.70, 0.95 }
 local FLOAT_REMINDER_ACTION_HOVER_COLOR = { 0.95, 0.95, 0.95, 1.0 }
+local FLOAT_LINK_HOVER_BRIGHTEN = 0.70
 local NOTES_SCROLL_MULT = 1.25
 local NOTES_MOUSE_WHEEL_SCROLL_STEP = 40
 
@@ -108,6 +109,51 @@ end
 
 local function GetFloatMarkerTextColor()
     return FLOAT_LIST_MARKER_COLOR
+end
+
+local function GetBrightenedFloatColor(color)
+    local red = math.min((color and color[1] or 1) + ((1 - (color and color[1] or 1)) * FLOAT_LINK_HOVER_BRIGHTEN), 1)
+    local green = math.min((color and color[2] or 1) + ((1 - (color and color[2] or 1)) * FLOAT_LINK_HOVER_BRIGHTEN), 1)
+    local blue = math.min((color and color[3] or 1) + ((1 - (color and color[3] or 1)) * FLOAT_LINK_HOVER_BRIGHTEN), 1)
+    return red, green, blue, color and color[4] or 1
+end
+
+local function RestoreFloatLinkTextColor(chunk)
+    local hoverGroup = chunk and chunk.hoverGroup or nil
+    if hoverGroup and hoverGroup.chunks and hoverGroup.baseColor then
+        local baseColor = hoverGroup.baseColor
+        for _, groupChunk in ipairs(hoverGroup.chunks) do
+            if groupChunk.text then
+                groupChunk.text:SetTextColor(baseColor[1] or 1, baseColor[2] or 1, baseColor[3] or 1, baseColor[4] or 1)
+            end
+        end
+        return
+    end
+
+    local baseColor = chunk and chunk.hoverBaseColor or nil
+    if chunk and chunk.text and baseColor then
+        chunk.text:SetTextColor(baseColor[1] or 1, baseColor[2] or 1, baseColor[3] or 1, baseColor[4] or 1)
+    end
+end
+
+local function ApplyFloatLinkHoverColor(chunk)
+    local segmentData = chunk and chunk.segmentData or nil
+    if not segmentData or (segmentData.kind ~= "anchorLink" and segmentData.kind ~= "noteLink") then
+        return
+    end
+
+    local baseColor = chunk.hoverBaseColor
+    local hoverGroup = chunk.hoverGroup
+    if hoverGroup and hoverGroup.chunks and hoverGroup.baseColor then
+        local red, green, blue, alpha = GetBrightenedFloatColor(hoverGroup.baseColor)
+        for _, groupChunk in ipairs(hoverGroup.chunks) do
+            if groupChunk.text then
+                groupChunk.text:SetTextColor(red, green, blue, alpha)
+            end
+        end
+    elseif chunk.text and baseColor then
+        chunk.text:SetTextColor(GetBrightenedFloatColor(baseColor))
+    end
 end
 
 local function GetFloatSegmentColor(lineType, segmentData)
@@ -305,7 +351,12 @@ local function ClearScrollFrameTemplateRegions(scrollFrame)
 end
 
 local function SetChunkInteractiveState(chunk, enabled)
+    RestoreFloatLinkTextColor(chunk)
     chunk.segmentData = enabled and chunk.segmentData or nil
+    if not enabled then
+        chunk.hoverBaseColor = nil
+        chunk.hoverGroup = nil
+    end
     chunk:EnableMouse(enabled)
 end
 
@@ -318,27 +369,23 @@ local function ConfigureFloatInteractiveChunk(chunk)
         end
 
         if segmentData.kind == "noteLink" then
-            local targetNote = segmentData.targetNote
-            GameTooltip:SetOwner(selfChunk, "ANCHOR_RIGHT")
-            GameTooltip:SetText(segmentData.linkText or segmentData.displayText or "", unpack(FLOAT_LINK_COLOR))
-            if targetNote and targetNote.title and targetNote.title ~= "" then
-                GameTooltip:AddLine(targetNote.title, 0.92, 0.88, 0.80, true)
-            end
-            GameTooltip:AddLine("Open note", 0.92, 0.88, 0.80, true)
-            GameTooltip:Show()
+            ApplyFloatLinkHoverColor(selfChunk)
             return
         end
 
-        GameTooltip:SetOwner(selfChunk, "ANCHOR_RIGHT")
         if segmentData.kind == "anchorLink" then
-            GameTooltip:SetText(segmentData.linkText or segmentData.displayText or "", unpack(FLOAT_LINK_COLOR))
-            GameTooltip:AddLine("Jump to section", 0.92, 0.88, 0.80, true)
-        elseif segmentData.itemLink then
-            GameTooltip:SetHyperlink(segmentData.itemLink)
+            ApplyFloatLinkHoverColor(selfChunk)
+            return
         end
-        GameTooltip:Show()
+
+        if segmentData.itemLink then
+            GameTooltip:SetOwner(selfChunk, "ANCHOR_RIGHT")
+            GameTooltip:SetHyperlink(segmentData.itemLink)
+            GameTooltip:Show()
+        end
     end)
-    chunk:SetScript("OnLeave", function()
+    chunk:SetScript("OnLeave", function(selfChunk)
+        RestoreFloatLinkTextColor(selfChunk)
         GameTooltip:Hide()
     end)
     chunk:SetScript("OnClick", function(selfChunk, button)
@@ -400,7 +447,10 @@ local function HideUnusedFloatChunks(row)
     end
 
     for _, chunk in ipairs(row.floatChunks) do
+        RestoreFloatLinkTextColor(chunk)
         chunk.segmentData = nil
+        chunk.hoverBaseColor = nil
+        chunk.hoverGroup = nil
         chunk:EnableMouse(false)
         chunk.background:Hide()
         chunk.text:SetText("")
@@ -669,6 +719,7 @@ local function RenderFloatInlineRow(view, row, entry, segments)
     end
 
     local chunkIndex = 0
+    local hoverGroupsBySegment = {}
     local markerOffset = markerWidth > 0 and (markerWidth + FLOAT_MARKER_GAP) or 0
     local yOffset = topInset
     for _, lineData in ipairs(lines) do
@@ -697,6 +748,28 @@ local function RenderFloatInlineRow(view, row, entry, segments)
             else
                 chunk.text:SetTextColor(1, 1, 1)
             end
+            if chunk.segmentData and (chunk.segmentData.kind == "anchorLink" or chunk.segmentData.kind == "noteLink") then
+                local baseColor = textColor or { 1, 1, 1 }
+                local hoverGroup = hoverGroupsBySegment[chunk.segmentData]
+                if not hoverGroup then
+                    hoverGroup = {
+                        baseColor = {
+                            baseColor[1] or 1,
+                            baseColor[2] or 1,
+                            baseColor[3] or 1,
+                            baseColor[4] or 1,
+                        },
+                        chunks = {},
+                    }
+                    hoverGroupsBySegment[chunk.segmentData] = hoverGroup
+                end
+                hoverGroup.chunks[#hoverGroup.chunks + 1] = chunk
+                chunk.hoverBaseColor = nil
+                chunk.hoverGroup = hoverGroup
+            else
+                chunk.hoverBaseColor = nil
+                chunk.hoverGroup = nil
+            end
             chunk.background:Hide()
             local chunkWidth = unit.width
             local chunkHeight = math.max(lineData.height, unit.height)
@@ -718,7 +791,10 @@ local function RenderFloatInlineRow(view, row, entry, segments)
 
     if row.floatChunks then
         for index = chunkIndex + 1, #row.floatChunks do
+            RestoreFloatLinkTextColor(row.floatChunks[index])
             row.floatChunks[index].segmentData = nil
+            row.floatChunks[index].hoverBaseColor = nil
+            row.floatChunks[index].hoverGroup = nil
             row.floatChunks[index]:EnableMouse(false)
             row.floatChunks[index]:Hide()
             row.floatChunks[index].background:Hide()
@@ -742,6 +818,8 @@ local function RenderFloatCodeRow(view, row, displayText, reminderDone)
     row.codeBackground:SetPoint("TOPLEFT", row, "TOPLEFT", FLOAT_ROW_SIDE_PADDING, -FLOAT_ROW_TOP_PADDING)
     row.codeBackground:SetPoint("TOPRIGHT", row, "TOPRIGHT", -FLOAT_ROW_SIDE_PADDING, -FLOAT_ROW_TOP_PADDING)
     chunk.segmentData = nil
+    chunk.hoverBaseColor = nil
+    chunk.hoverGroup = nil
     chunk:ClearAllPoints()
     chunk:SetPoint("TOPLEFT", row, "TOPLEFT", FLOAT_ROW_SIDE_PADDING + FLOAT_CODE_BLOCK_PADDING_X, -(FLOAT_ROW_TOP_PADDING + FLOAT_CODE_BLOCK_PADDING_Y))
     chunk.text:ClearAllPoints()

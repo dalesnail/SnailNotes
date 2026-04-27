@@ -1816,6 +1816,15 @@ function module:RefreshTabLayout()
     end
 end
 
+function module:UpdateWindowResizeGripVisibility(frame)
+    frame = frame or self.runtime and self.runtime.frame or nil
+    if not frame or not frame.resizeGrip then
+        return
+    end
+
+    frame.resizeGrip:SetShown(not self:IsHomeTabActive())
+end
+
 function module:SelectTab(tabKey)
     local runtime = self.runtime
     local tab = runtime and runtime.tabs and runtime.tabs[tabKey]
@@ -1836,6 +1845,7 @@ function module:SelectTab(tabKey)
 
     if runtime.frame then
         self:ApplyWindowGeometry(runtime.frame)
+        self:UpdateWindowResizeGripVisibility(runtime.frame)
     end
 
     if tabKey == "home" then
@@ -2497,6 +2507,7 @@ function module:CreateNotesFrame()
         EndResizeFromGrip(frame)
         module:SaveWindowGeometry(frame)
     end)
+    self:UpdateWindowResizeGripVisibility(frame)
 
     self.runtime.frame = frame
     self.runtime.tabs = {}

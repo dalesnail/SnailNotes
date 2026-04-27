@@ -11,6 +11,8 @@ local WINDOW_DEFAULT_WIDTH = 760
 local WINDOW_DEFAULT_HEIGHT = 560
 local WINDOW_MIN_WIDTH = 540
 local WINDOW_MIN_HEIGHT = 420
+local HOME_WINDOW_WIDTH = WINDOW_MIN_WIDTH
+local HOME_WINDOW_HEIGHT = 630
 local WINDOW_SCREEN_MARGIN = 48
 
 -- Tabs And Note Defaults
@@ -328,8 +330,7 @@ local function ClampWindowSize(width, height)
 end
 
 local function ClampHomeWindowSize(width, height)
-    local _, clampedHeight = ClampWindowSize(WINDOW_MIN_WIDTH, height)
-    return WINDOW_MIN_WIDTH, clampedHeight
+    return ClampWindowSize(HOME_WINDOW_WIDTH, HOME_WINDOW_HEIGHT)
 end
 
 local function CompactCheckboxRow(row)
@@ -459,8 +460,10 @@ ns.SnailNotesDefaults = {
         },
         window = {
             width = WINDOW_DEFAULT_WIDTH,
-            homeWidth = WINDOW_MIN_WIDTH,
+            homeWidth = HOME_WINDOW_WIDTH,
+            homeHeight = HOME_WINDOW_HEIGHT,
             noteWidth = WINDOW_DEFAULT_WIDTH,
+            noteHeight = WINDOW_DEFAULT_HEIGHT,
             height = WINDOW_DEFAULT_HEIGHT,
             point = "CENTER",
             relativePoint = "CENTER",
@@ -564,8 +567,10 @@ function module:GetWindowSettings()
     local settings = self:GetSettings()
     settings.window = settings.window or {}
     settings.window.width = tonumber(settings.window.width) or WINDOW_DEFAULT_WIDTH
-    settings.window.homeWidth = tonumber(settings.window.homeWidth) or WINDOW_MIN_WIDTH
+    settings.window.homeWidth = HOME_WINDOW_WIDTH
+    settings.window.homeHeight = HOME_WINDOW_HEIGHT
     settings.window.noteWidth = tonumber(settings.window.noteWidth) or WINDOW_DEFAULT_WIDTH
+    settings.window.noteHeight = tonumber(settings.window.noteHeight) or tonumber(settings.window.height) or WINDOW_DEFAULT_HEIGHT
     return settings.window
 end
 
@@ -763,12 +768,15 @@ function module:SaveWindowGeometry(frame)
     local width, height
     if self:IsHomeTabActive() then
         width, height = ClampHomeWindowSize(frame:GetWidth(), frame:GetHeight())
+        settings.homeWidth = width
+        settings.homeHeight = height
     else
         width, height = ClampWindowSize(frame:GetWidth(), frame:GetHeight())
+        settings.noteWidth = width
+        settings.noteHeight = height
+        settings.width = width
+        settings.height = height
     end
-    settings[self:GetActiveWindowWidthSettingKey()] = width
-    settings.width = width
-    settings.height = height
 
     local point, _, relativePoint, x, y = frame:GetPoint(1)
     settings.point = point or "CENTER"
@@ -784,7 +792,18 @@ function module:UpdateWindowResizeBounds(frame)
 
     local maxWidth, maxHeight = GetSafeWindowScreenBounds()
     if self:IsHomeTabActive() then
-        maxWidth = math.max(math.min(WINDOW_MIN_WIDTH, maxWidth), WINDOW_MIN_WIDTH)
+        local homeWidth, homeHeight = ClampHomeWindowSize()
+        if frame.SetMinResize then
+            frame:SetMinResize(homeWidth, homeHeight)
+        end
+        if frame.SetResizeBounds then
+            frame:SetResizeBounds(homeWidth, homeHeight, homeWidth, homeHeight)
+            return
+        end
+        maxWidth = homeWidth
+        maxHeight = homeHeight
+    elseif frame.SetMinResize then
+        frame:SetMinResize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
     end
 
     if frame.SetResizeBounds then
@@ -841,9 +860,9 @@ function module:ApplyWindowGeometry(frame)
     self:UpdateWindowResizeBounds(frame)
     local width, height
     if self:IsHomeTabActive() then
-        width, height = ClampHomeWindowSize(self:GetActiveWindowWidth(settings), settings.height)
+        width, height = ClampHomeWindowSize(settings.homeWidth, settings.homeHeight)
     else
-        width, height = ClampWindowSize(self:GetActiveWindowWidth(settings), settings.height)
+        width, height = ClampWindowSize(self:GetActiveWindowWidth(settings), settings.noteHeight)
     end
     frame:SetSize(width, height)
     frame:ClearAllPoints()
@@ -1856,8 +1875,10 @@ function module:GetNoteReadBodyTextHeight(view)
 
     local textHeight = 0
     local previousLineType = nil
-    for _, row in ipairs(view.bodyLines) do
-        if row:IsShown() then
+    local renderedLineCount = tonumber(view.renderedReadLineCount) or #(view.bodyLines or {})
+    for index = 1, renderedLineCount do
+        local row = view.bodyLines[index]
+        if row and row:IsShown() then
             textHeight = textHeight + math.max(row:GetHeight() or 0, 0)
             if previousLineType then
                 textHeight = textHeight + self:GetReadViewLineSpacing(previousLineType, row.lineType, view)
@@ -2671,6 +2692,8 @@ shared.constants = {
     WINDOW_DEFAULT_HEIGHT = WINDOW_DEFAULT_HEIGHT,
     WINDOW_MIN_WIDTH = WINDOW_MIN_WIDTH,
     WINDOW_MIN_HEIGHT = WINDOW_MIN_HEIGHT,
+    HOME_WINDOW_WIDTH = HOME_WINDOW_WIDTH,
+    HOME_WINDOW_HEIGHT = HOME_WINDOW_HEIGHT,
     WINDOW_SCREEN_MARGIN = WINDOW_SCREEN_MARGIN,
     MAX_NOTE_TABS = MAX_NOTE_TABS,
     TAB_HEIGHT = TAB_HEIGHT,
